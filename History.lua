@@ -73,6 +73,40 @@ function History.Record(db, now, stats, diff, gap)
   ns.dataVersion = (ns.dataVersion or 0) + 1
 end
 
+-- Série intra-journalière sur 48 h : db.recent[id] = "t,médiane,qté;t,médiane,qté;…"
+History.RECENT_SECS = 48 * 3600
+
+function History.RecordRecent(db, now, stats)
+  db.recent = db.recent or {}
+  local limit = now - History.RECENT_SECS
+  for id, s in pairs(stats) do
+    if s.med and s.med > 0 then
+      local str = (db.recent[id] or "") .. now .. "," .. s.med .. "," .. s.q .. ";"
+      -- retire les points de plus de 48 h en tête de chaîne
+      while true do
+        local t, rest = str:match("^(%d+),[^;]*;(.*)$")
+        if t and tonumber(t) < limit then str = rest else break end
+      end
+      db.recent[id] = str
+    end
+  end
+  -- objets absents depuis plus de 48 h
+  for id, str in pairs(db.recent) do
+    local last = str:match("(%d+),[^;]*;$")
+    if not last or tonumber(last) < limit then db.recent[id] = nil end
+  end
+end
+
+function History.Recent(db, id)
+  local out = {}
+  local str = db.recent and db.recent[id]
+  if not str then return out end
+  for t, med, q in str:gmatch("(%d+),(%d+),(%d+);") do
+    out[#out + 1] = { tonumber(t), tonumber(med), tonumber(q) }
+  end
+  return out
+end
+
 function History.Prune(db, today)
   local limit = today - History.KEEP_DAYS
   for d in pairs(db.days) do

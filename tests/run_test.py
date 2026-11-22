@@ -141,8 +141,17 @@ print(logs[-1])
 assert sum("Scan Auctionator terminé" in m for m in logs) == 2, logs[-5:]
 assert ns.UI.embedded == True
 
-# Tooltip : ne doit pas planter
-lua.execute("GameTooltip.GetItem = function() return 'Silk', '|Hitem:4306::::|h' end; GameTooltip.scripts.OnTooltipSetItem(GameTooltip)")
+# Tooltip : tendance 24 h issue des scans récents
+lua.execute("""
+TT = {}
+GameTooltip.AddLine = function(_, t) TT[#TT + 1] = t end
+GameTooltip.AddDoubleLine = function(_, a, b) TT[#TT + 1] = a .. " = " .. b end
+GameTooltip.GetItem = function() return 'Silk', '|Hitem:4306::::|h' end
+GameTooltip.scripts.OnTooltipSetItem(GameTooltip)
+""")
+tt = [strip(re.sub(r"\|T[^|]*\|t", "", x)) for x in lua.eval("TT").values()]
+print("\n".join(tt))
+assert any(x.startswith("Tendance 24 h = +") for x in tt), tt
 
 # Export + script Python
 sv = Path(__file__).parent / "AHLedger.lua"

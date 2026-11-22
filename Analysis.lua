@@ -26,6 +26,30 @@ local function slope(pts)
   return (n * sxy - sx * sy) / den
 end
 
+-- Comme slope(), mais accepte 2 points (tendance indicative)
+local function slope2(pts)
+  if #pts == 2 then
+    local dx = pts[2][1] - pts[1][1]
+    return dx ~= 0 and (pts[2][2] - pts[1][2]) / dx or nil
+  end
+  return slope(pts)
+end
+
+-- Tendance courte : régression sur les scans des dernières 24 h (%/jour), et variation sur la période
+function Analysis.ShortTrend(db, id, now)
+  local pts, first, last = {}, nil, nil
+  for _, p in ipairs(History.Recent(db, id)) do
+    if p[1] >= now - 86400 then
+      pts[#pts + 1] = { (p[1] - now) / 86400, math.log(p[2]) }
+      first = first or p
+      last = p
+    end
+  end
+  if #pts < 2 or (last[1] - first[1]) < 2 * 3600 then return nil end
+  local b = slope2(pts)
+  return b and (math.exp(b) - 1), last[2] / first[2] - 1, #pts, (last[1] - first[1]) / 3600
+end
+
 -- Statistiques d'un objet sur les 14 derniers jours
 function Analysis.ItemStats(db, id, today)
   local h = db.hist and db.hist[id]
@@ -81,7 +105,7 @@ function Analysis.ItemStats(db, id, today)
   -- Pas encore 3 jours de données AHLedger : on s'appuie sur l'historique d'Auctionator
   if not s.trend and ns.Bridge then
     local ah = ns.Bridge.History(id, 14)
-    if ah and #ah >= 3 then
+    if ah and #ah >= 2 then
       local apts, rq, rn, pq, pn = {}, 0, 0, 0, 0
       for _, e in ipairs(ah) do
         if e[1] > -Analysis.TREND_DAYS then apts[#apts + 1] = { e[1], math.log(e[2]) } end
@@ -89,7 +113,7 @@ function Analysis.ItemStats(db, id, today)
           if e[1] > -3 then rq, rn = rq + e[3], rn + 1 elseif e[1] > -10 then pq, pn = pq + e[3], pn + 1 end
         end
       end
-      local ab = slope(apts)
+      local ab = #apts >= 2 and slope2(apts) or nil
       if ab then s.trend = math.exp(ab) - 1; s.trendSrc = "Auctionator" end
       if not s.stockChg and rn > 0 and pn > 0 and pq > 0 then s.stockChg = (rq / rn) / (pq / pn) - 1 end
     end
@@ -103,6 +127,15 @@ function Analysis.ItemStats(db, id, today)
   end
 
   s.minNow = db.lastMin and db.lastMin[id] -- prix d'achat le plus bas à l'unité (dernier scan)
+  s.trend24, s.change24, s.n24, s.span24 = Analysis.ShortTrend(db, id, time())
+  -- prix d'achat actuel comparé au prix moyen des 7 derniers jours
+  local sum, n = 0, 0
+  for d = today - 6, today do
+    local r = History.parse(h[d])
+    if r and r.pN > 0 then sum, n = sum + r.pSum / r.pN, n + 1 end
+  end
+  s.avg7 = n > 0 and sum / n or nil
+  if s.minNow and s.avg7 and s.avg7 > 0 then s.vsAvg = s.minNow / s.avg7 - 1 end
   s.net = s.price * (1 - Analysis.AH_CUT)
   s.gpd = s.perDay and s.net * s.perDay or 0           -- or échangeable par jour sur ce marché
 

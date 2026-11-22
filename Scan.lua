@@ -374,6 +374,7 @@ function Scan.Finish()
   end
 
   ns.History.Record(db, now, stats, diff, diff and gap or nil)
+  ns.History.RecordRecent(db, now, stats)
   ns.Snipe.FromScan(rows, now)
 
   -- Snapshots bruts : seulement pour l'export Python (/ahl raw on), car volumineux
