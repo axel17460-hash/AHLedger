@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS item_scans (
   realm TEXT, t INTEGER, item INTEGER,
   n INTEGER, qty INTEGER, min INTEGER, p25 INTEGER, med INTEGER,
   sold INTEGER, expired INTEGER, ambiguous INTEGER, posted INTEGER, sold_value INTEGER,
+  p75 INTEGER, sellers INTEGER, top_share INTEGER,
   PRIMARY KEY (realm, t, item));
 CREATE TABLE IF NOT EXISTS vendor (
   realm TEXT, item INTEGER, price INTEGER, lim INTEGER, npc TEXT, zone TEXT, t INTEGER,
@@ -157,11 +158,14 @@ def cmd_import(path):
             cur.execute("INSERT INTO scans VALUES (?,?,?,?,?,?)",
                         (realm, s["t"], s.get("dur"), s.get("total"), s.get("missing"), s.get("gap")))
             rows = []
-            for item_id, packed in (s.get("items") or {}).items():
+            items = s.get("items") or {}
+            if isinstance(items, str):  # v2 : "id=champs;id=champs"
+                items = dict(part.split("=", 1) for part in items.split(";") if part)
+            for item_id, packed in items.items():
                 vals = [int(v) for v in packed.split(",")]
-                vals += [0] * (10 - len(vals))  # v0.1 : 9 champs
-                rows.append((realm, s["t"], item_id, *vals))
-            cur.executemany("INSERT INTO item_scans VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+                vals += [None] * (13 - len(vals))  # anciens formats : champs manquants
+                rows.append((realm, s["t"], int(item_id), *vals[:13]))
+            cur.executemany("INSERT INTO item_scans VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
 
         for item_id, v in (r.get("vendor") or {}).items():
             cur.execute("INSERT OR REPLACE INTO vendor VALUES (?,?,?,?,?,?,?)",

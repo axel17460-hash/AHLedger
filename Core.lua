@@ -2,7 +2,7 @@
 local ADDON, ns = ...
 
 ns.DB_VERSION = 1
-ns.MAX_SCANS = 48           -- snapshots bruts gardés pour l'export Python (l'analyse en jeu utilise l'historique journalier)
+ns.MAX_SCANS = 300          -- snapshots horodatés gardés (≈ 7 j à 2 scans/h de jeu) ; importer puis /ahl prune pour alléger
 ns.listeners = {}
 
 -- Compatibilité : le client Forever tourne sur un moteur récent, certaines fonctions
@@ -192,7 +192,7 @@ local function slash(input)
       AuctionHouseFrame and (AuctionHouseFrame:IsShown() and "visible" or "caché") or "absent",
       QueryAuctionItems and "oui" or "non", tostring(canQ), tostring(canAll), ns.realmKey()))
   elseif cmd == "raw" then
-    AHLedgerDB.keepRaw = (rest == "on")
+    AHLedgerDB.keepRaw = (rest ~= "off")
     ns.print("Snapshots bruts pour l'export Python : " .. (AHLedgerDB.keepRaw and "activés" or "désactivés"))
   elseif cmd == "scan" then
     ns.Scan.Start()

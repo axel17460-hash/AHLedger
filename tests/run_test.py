@@ -15,7 +15,7 @@ for f in [l.strip() for l in toc.splitlines() if l.strip().endswith(".lua")]:
     if chunk is None:
         sys.exit(f"Erreur de syntaxe : {err}")
     chunk("AHLedger", ns)
-lua.execute('fire("ADDON_LOADED", "AHLedger"); AHLedgerDB.keepRaw = true; GetRealmName = function() return "" end; fire("AUCTION_HOUSE_SHOW"); runTimers()')
+lua.execute('fire("ADDON_LOADED", "AHLedger"); GetRealmName = function() return "" end; fire("AUCTION_HOUSE_SHOW"); runTimers()')
 
 # 14 jours ; le joueur scanne chaque soir de 18 h à 23 h
 lua.execute("""

@@ -173,6 +173,14 @@ function Scan.FromAuctionator(raw)
   Scan.Finish()
 end
 
+-- Snapshot compact : une seule chaîne par scan
+-- champs : nb,qté,min,p25,médiane,vendu,expiré,ambigu,posté,valeurVendue,p75,vendeurs,partTop‰
+function Scan.PackItems(packed)
+  local parts = {}
+  for id, s in pairs(packed) do parts[#parts + 1] = id .. "=" .. s end
+  return table.concat(parts, ";")
+end
+
 function Scan.RecentlyDone()
   local db = ns.realmDB()
   return db.lastScanTime and time() - db.lastScanTime < 120
@@ -249,11 +257,12 @@ function Scan.Aggregate(rows)
   for _, r in ipairs(rows) do
     local it = items[r.id]
     if not it then
-      it = { n = 0, q = 0, prices = {} }
+      it = { n = 0, q = 0, prices = {}, owners = {} }
       items[r.id] = it
       ns.rememberItem(r.id, r.name)
     end
     it.n = it.n + 1
+    it.owners[r.owner] = (it.owners[r.owner] or 0) + r.count
     it.q = it.q + r.count
     if r.buyout > 0 then
       it.prices[#it.prices + 1] = { math.floor(r.buyout / r.count), r.count }
@@ -346,12 +355,21 @@ function Scan.Finish()
     local d = diff and diff[id]
     local med = weightedPercentile(it.prices, 0.5)
     if items[id] then stats[id] = { med = med, q = it.q } end
+    -- structure du marché : nombre de vendeurs et part du plus gros (en ‰ des unités)
+    local sellers, top = 0, 0
+    for _, q in pairs(it.owners or {}) do
+      sellers = sellers + 1
+      if q > top then top = q end
+    end
     packed[id] = table.concat({
       it.n, it.q, minP,
       weightedPercentile(it.prices, 0.25),
       med,
       d and d.sold or 0, d and d.exp or 0, d and d.amb or 0, d and d.posted or 0,
       d and d.soldVal or 0,
+      weightedPercentile(it.prices, 0.75),
+      sellers,
+      it.q > 0 and math.floor(top * 1000 / it.q) or 0,
     }, ",")
   end
 
@@ -359,14 +377,16 @@ function Scan.Finish()
   ns.Snipe.FromScan(rows, now)
 
   -- Snapshots bruts : seulement pour l'export Python (/ahl raw on), car volumineux
-  if AHLedgerDB.keepRaw then
+  if AHLedgerDB.keepRaw ~= false then
     db.scans[#db.scans + 1] = {
       t = now,
       dur = now - Scan.startTime,
       total = Scan.total,
       missing = #Scan.pending,
       gap = diff and gap or nil,   -- présent seulement si le diff est exploitable
-      items = packed,
+      v = 2,               -- format : une chaîne "id=champs;id=champs…" (plus léger à charger)
+      src = Scan.source or "AHLedger",
+      items = Scan.PackItems(packed),
     }
   end
   while #db.scans > ns.MAX_SCANS do table.remove(db.scans, 1) end
