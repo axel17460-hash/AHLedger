@@ -102,6 +102,7 @@ function Analysis.ItemStats(db, id, today)
     s.stockChg = (recent.q / recent.qn) / (prior.q / prior.qn) - 1
   end
 
+  s.minNow = db.lastMin and db.lastMin[id] -- prix d'achat le plus bas à l'unité (dernier scan)
   s.net = s.price * (1 - Analysis.AH_CUT)
   s.gpd = s.perDay and s.net * s.perDay or 0           -- or échangeable par jour sur ce marché
 

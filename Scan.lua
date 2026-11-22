@@ -334,6 +334,7 @@ function Scan.Finish()
 
   -- Format compact par objet : "nb,qté,min,p25,médiane,vendu,expiré,ambigu,posté,valeurVendue"
   local packed, stats = {}, {}
+  db.lastMin = {} -- prix d'achat le plus bas à l'unité, au dernier scan
   local ids = {}
   for id in pairs(items) do ids[id] = true end
   if diff then for id in pairs(diff) do ids[id] = true end end
@@ -341,6 +342,7 @@ function Scan.Finish()
     local it = items[id] or { n = 0, q = 0, prices = {} }
     table.sort(it.prices, function(a, b) return a[1] < b[1] end)
     local minP = it.prices[1] and it.prices[1][1] or 0
+    if minP > 0 then db.lastMin[id] = minP end
     local d = diff and diff[id]
     local med = weightedPercentile(it.prices, 0.5)
     if items[id] then stats[id] = { med = med, q = it.q } end

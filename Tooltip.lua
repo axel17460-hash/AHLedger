@@ -8,6 +8,9 @@ local function addLines(tooltip, id)
   tooltip:AddLine(" ")
   tooltip:AddDoubleLine("|cff33ccffAHLedger|r " .. (s.realPrice and "prix de vente réel" or "prix affiché"),
     ns.money(s.price), 1, 1, 1, 1, 1, 1)
+  if s.minNow then
+    tooltip:AddDoubleLine("Achat le moins cher /u (dernier scan)", ns.money(s.minNow), 0.8, 0.8, 0.8, 1, 1, 1)
+  end
   tooltip:AddDoubleLine("Tendance /jour", ns.pct(s.trend), 0.8, 0.8, 0.8, 1, 1, 1)
   tooltip:AddDoubleLine("Vendus /jour (estim.)",
     s.perDay and ("%.0f  (stock %.0f)"):format(s.perDay, s.stock or 0) or "?", 0.8, 0.8, 0.8, 1, 1, 1)

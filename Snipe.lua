@@ -41,6 +41,7 @@ function Snipe.FromScan(rows, now)
     local o = Snipe.Evaluate(r)
     if o then
       o.id, o.name, o.count, o.owner, o.t = r.id, r.name, r.count, r.owner, now
+      o.unitCost, o.unitValue = o.cost / r.count, o.value / r.count
       list[#list + 1] = o
     end
   end
