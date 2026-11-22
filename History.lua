@@ -1,0 +1,88 @@
+-- AHLedger - Historique journalier compact par objet
+--
+-- db.days[jour]  = { obs = secondes de marché observées (somme des écarts entre scans comparables),
+--                    scans = nombre de scans }
+-- db.hist[id][jour] = "sommePrix,nbPrix,sommeStock,vendu,ambigu,valeurVendue"
+--   sommePrix/nbPrix : moyenne des prix médians affichés ce jour-là
+--   sommeStock       : à diviser par days[jour].scans (stock moyen à l'HV)
+--   vendu/ambigu     : unités disparues estimées vendues / incertaines
+--   valeurVendue     : cuivre total des enchères vendues (=> prix réel de vente)
+local _, ns = ...
+
+local History = {}
+ns.History = History
+
+History.KEEP_DAYS = 30
+
+function History.today(t)
+  return math.floor((t or time()) / 86400)
+end
+
+function History.parse(s)
+  if not s then return nil end
+  local a, b, c, d, e, f = s:match("^(%d+),(%d+),(%d+),(%d+),(%d+),(%d+)$")
+  if not a then return nil end
+  return { pSum = tonumber(a), pN = tonumber(b), qSum = tonumber(c),
+           sold = tonumber(d), amb = tonumber(e), soldVal = tonumber(f) }
+end
+
+local function pack(r)
+  return table.concat({ r.pSum, r.pN, r.qSum, r.sold, r.amb, r.soldVal }, ",")
+end
+
+-- stats[id] = { med=, q= } pour les objets présents ; diff[id] = { sold, amb, soldVal, ... } ou nil
+function History.Record(db, now, stats, diff, gap)
+  db.hist = db.hist or {}
+  db.days = db.days or {}
+  local day = History.today(now)
+  local dayRec = db.days[day]
+  if not dayRec then
+    dayRec = { obs = 0, scans = 0 }
+    db.days[day] = dayRec
+  end
+  dayRec.scans = dayRec.scans + 1
+  if diff and gap then dayRec.obs = dayRec.obs + gap end
+
+  local ids = {}
+  for id in pairs(stats) do ids[id] = true end
+  if diff then for id in pairs(diff) do ids[id] = true end end
+
+  for id in pairs(ids) do
+    local h = db.hist[id]
+    if not h then h = {}; db.hist[id] = h end
+    local r = History.parse(h[day]) or { pSum = 0, pN = 0, qSum = 0, sold = 0, amb = 0, soldVal = 0 }
+    local s = stats[id]
+    if s and s.med and s.med > 0 then
+      r.pSum = r.pSum + s.med
+      r.pN = r.pN + 1
+    end
+    if s then r.qSum = r.qSum + s.q end
+    local d = diff and diff[id]
+    if d then
+      r.sold = r.sold + d.sold
+      r.amb = r.amb + d.amb
+      r.soldVal = r.soldVal + d.soldVal
+    end
+    h[day] = pack(r)
+  end
+
+  if db.lastDay ~= day then
+    db.lastDay = day
+    History.Prune(db, day)
+  end
+  ns.dataVersion = (ns.dataVersion or 0) + 1
+end
+
+function History.Prune(db, today)
+  local limit = today - History.KEEP_DAYS
+  for d in pairs(db.days) do
+    if d < limit then db.days[d] = nil end
+  end
+  for id, h in pairs(db.hist) do
+    local any = false
+    for d in pairs(h) do
+      if d < limit then h[d] = nil else any = true end
+    end
+    if not any then db.hist[id] = nil end
+  end
+end

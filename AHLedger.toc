@@ -1,0 +1,19 @@
+## Interface: 16001
+## Title: AHLedger
+## Notes: Collecte de données d'hôtel des ventes, prix vendeurs et sessions de farm pour analyse hors jeu.
+## Author: Axel
+## Version: 0.4.0
+## SavedVariables: AHLedgerDB
+
+# 16001 = WoW Forever 1.60 (même valeur qu'Auctionator)
+
+Core.lua
+History.lua
+Analysis.lua
+Scan.lua
+Vendor.lua
+Farm.lua
+Snipe.lua
+Bridge.lua
+Tooltip.lua
+UI.lua
