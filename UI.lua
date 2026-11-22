@@ -370,3 +370,7 @@ local function createAHTab()
 end
 
 ns.on("AUCTION_HOUSE_SHOW", function() ns.safe("onglet HV", createAHTab) end)
+-- Rien d'AHLedger ne reste à l'écran quand on quitte l'HV
+ns.on("AUCTION_HOUSE_CLOSED", function()
+  if UI.embedded and UI.frame then UI.frame:Hide() end
+end)
