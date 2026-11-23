@@ -26,6 +26,7 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 | `Professions.lua` | Niveaux de métier, recettes relevées à l'ouverture des fenêtres de métier (Classic et Retail), table des cuirs pour le dépeçage |
 | `Bags.lua` | Conseiller d'inventaire (sacs et banque) : vendre HV / garder / PNJ / attendre |
 | `Ledger.lua` | Bilan réel lu dans les courriers d'HV ; calibre `AH_CUT` et `DEPOSIT_RATE` dès 5 ventes |
+| `Track.lua` | Fiabilité des conseils : note les flips / achats PNJ conseillés à chaque scan (`db.track`), les vérifie sur les scans suivants (prix tenu, écoulé) et les rapproche de tes achats réels ; vue « fiabilité » de l'onglet Bilan, `/ahl fiabilite` |
 | `RecipeDB.lua` | Fournisseurs de recettes (`RecipeDB.Register`) et planificateur de montée (`/ahl monter cuir 225`) |
 | `Export.lua` | Rapport texte pour Claude (`/ahl claude`), aussi sauvé dans `AHLedgerDB.brief` |
 | `Diag.lua` | `/ahl diag` : API présentes, variante utilisée, événements refusés, erreurs |

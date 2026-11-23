@@ -249,13 +249,15 @@ local function slash(input)
     ns.Export.Show()
   elseif cmd == "bilan" then
     ns.Ledger.Report()
+  elseif cmd == "fiabilite" or cmd == "fiabilité" then
+    ns.Track.Report()
   elseif cmd == "prune" then
     local keep = tonumber(rest) or 0
     local r = ns.realmDB()
     while #r.scans > keep do table.remove(r.scans, 1) end
     ns.print(("Scans purgés, %d conservés. Pense à /reload pour écrire le fichier."):format(#r.scans))
   else
-    ns.print("Commandes : /ahl (fenêtre) | options | scan | status | metiers | bilan | claude (rapport à copier) | diag | monter <métier> [niveau] | farm start | farm stop | prune <n> | raw on|off | debug")
+    ns.print("Commandes : /ahl (fenêtre) | options | scan | status | metiers | bilan | fiabilite | claude (rapport à copier) | diag | monter <métier> [niveau] | farm start | farm stop | prune <n> | raw on|off | debug")
   end
 end
 SlashCmdList.AHLEDGER = function(input) ns.safe("/ahl " .. (input or ""), slash, input) end

@@ -107,7 +107,7 @@ print("\n".join(diag))
 assert any(l.startswith("OK   Scan HV") for l in diag) and any("Sources de recettes : connues, test" in l for l in diag)
 
 lua.execute("SlashCmdList.AHLEDGER('')")  # ouvre la fenêtre
-for mode in ("market", "flip", "craft", "level", "vendor", "snipe", "farm"):
+for mode in ("market", "flip", "craft", "level", "vendor", "snipe", "farm", "track"):
     show_ui(mode)
 
 # Flip HV : la pile bradée de soie doit ressortir, achetée jusqu'à 5 pa/u
@@ -954,3 +954,65 @@ assert shown and hidden and back, mm
 assert abs(sx + (70 - 17.5)) < 0.01 and abs(sy) < 0.01, mm   # carrée : bord gauche, à l'intérieur
 assert abs(rx) < 0.01 and abs(ry - 80) < 0.01, mm           # ronde : sur l'anneau, en haut
 print("OK : bouton de la minicarte")
+
+# Fiabilité des conseils : la simulation de 14 jours a noté et vérifié des conseils
+sim = lua.eval("""function(ns)
+  local rows = ns.Track.Summary()
+  local checked, open = 0, 0
+  for _, s in ipairs(rows) do checked, open = checked + s.checked, open + s.open end
+  return checked, open, #ns.Track.Lines()
+end""")(ns)
+print("Fiabilité (simulation) :", sim)
+assert sim[0] > 0 and sim[2] > 0, sim
+
+# Fiabilité : scénarios contrôlés (un flip qui tient, un qui s'effondre, un à stocker qui remonte, un suivi réel)
+tr = lua.eval("""function(ns)
+  local T, A = ns.Track, ns.Analysis
+  local db = { book = {} }
+  local savedF, savedV = A.Flips, A.VendorFlips
+  local flips = {
+    { id = 1, kind = "now", qty = 10, maxBuy = 500, cost = 5000, resale = 999, profit = 4000 },
+    { id = 2, kind = "now", qty = 10, maxBuy = 500, cost = 5000, resale = 999, profit = 4000 },
+    { id = 3, kind = "stock", known = false, qty = 5, maxBuy = 400, cost = 2000, resale = 950, profit = 1000 },
+  }
+  A.Flips = function() return flips end
+  A.VendorFlips = function() return {} end
+  local t0 = 2000000
+  local function book(id, str) db.book[id] = str end
+  -- scan 0 : les conseils sont notés
+  book(1, "0,0|500:10;1000:20"); book(2, "0,0|500:10;1000:20"); book(3, "0,0|400:5;600:50")
+  T.OnScan(db, t0, nil)
+  flips = {}
+  local sold = function(price, units) return { lv = { { price, units } } } end
+  -- scans suivants : objet 1 tient à 1000 et part à ce prix ; objet 2 bradé à 700 ; objet 3 remonte à 1000 au jour 4
+  for d = 1, 4 do
+    book(1, "0,0|1000:20"); book(2, "0,0|700:40")
+    book(3, d < 4 and "0,0|600:50" or "0,0|1000:30")
+    T.OnScan(db, t0 + d * 86400 - 3600, { [1] = sold(1000, 4), [2] = sold(700, 20), [3] = d == 4 and sold(1000, 6) or nil })
+  end
+  -- objet 1 : tu as suivi (10 achetés à 50 pa juste après le conseil, 10 revendus à 1000)
+  local ldb = ns.Ledger.DB()
+  local savedL = ldb.ledger
+  ldb.ledger = {
+    { k = "bought", id = 1, c = 10, g = 5000, t = t0 + 600 },
+    { k = "sold", id = 1, c = 10, g = 10000, cut = 500, t = t0 + 2 * 86400 },
+    { k = "bought", id = 2, c = 5, g = 2500, t = t0 + 3 * 86400 },  -- trop tard : pas un suivi
+  }
+  local rows = T.Summary(db)
+  ldb.ledger = savedL
+  A.Flips, A.VendorFlips = savedF, savedV
+  local by = {}
+  for _, s in ipairs(rows) do by[s.key] = s end
+  local done = {}
+  for _, r in ipairs(db.track.done) do done[r.id] = r end
+  return by.now.checked, by.now.ok, by.now.priceOk, by.now.followed, by.now.realGain,
+         done[1].status, done[2].status, done[2].gain, done[3] and done[3].status, by.stockTest.ok,
+         T.Achievable({ k = "now", qty = 10, buy = 500 }, { levels = { { 500, 4 }, { 520, 10 }, { 900, 3 } } })
+end""")(ns)
+print("Fiabilité (scénarios) :", tr)
+assert tr[0] == 2 and tr[1] == 1 and tr[2] == 1, tr       # 2 flips vérifiés : 1 réussi
+assert tr[3] == 1 and abs(tr[4] - 4500) < 1e-6, tr        # suivi réel : 10 × (950 − 500)
+assert tr[5] == "ok" and tr[6] == "ko" and tr[7] < 4000, tr
+assert tr[8] == "ok" and tr[9] == 1, tr                   # à stocker : remonté et écoulé, clos tôt
+assert tr[10] == 520, tr                                  # 10 unités achetées : 4 à 500, 6 à 520 → reste 520
+print("OK : fiabilité des conseils")

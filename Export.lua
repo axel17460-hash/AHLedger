@@ -141,6 +141,13 @@ function Export.Build()
 
   Export.MyAuctions(add)
 
+  add("")
+  add("## Fiabilité des conseils (vérifiés sur les scans suivants)")
+  add("prix tenu = la revente annoncée était atteignable ; écoulé = le marché a acheté au moins la quantité à ce prix (estimé : une annulation compte comme une vente) ; réussi = les deux ; suivi = tu as acheté l'objet dans les 24 h")
+  local track = ns.Track and ns.Track.Lines(nil, g) or {}
+  if #track == 0 then add("rien de vérifié pour l'instant") end
+  for _, l in ipairs(track) do add("%s", l) end
+
   local rows, tot = ns.Ledger.Summary()
   add("")
   add("## Bilan réel %d j (courriers d'HV)", ns.Ledger.DAYS)

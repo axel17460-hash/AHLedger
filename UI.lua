@@ -30,10 +30,19 @@ local EMPTY = {
   level = "Aucune recette connue : ouvre une fois la fenêtre de chacun de tes métiers.",
   bags = "Rien dans tes sacs pour l'instant : ouvre-les une fois (et ta banque) pour les relire.",
   ledger = "Aucun courrier d'HV relevé : passe à ta boîte aux lettres après tes ventes.",
+  track = "Aucun conseil noté pour l'instant : chaque scan note les flips et achats PNJ conseillés, et vérifie les anciens.",
   vendor = "Aucun achat PNJ rentable. Les marchands que tu visites sont retenus automatiquement.",
   snipe = "Aucune enchère sous le prix de rachat PNJ dans le dernier scan.",
   farm = "Aucune session de farm : tape /ahl farm start avant de farmer, puis /ahl farm stop.",
 }
+-- Onglets à deux vues : bouton « Vue : … » qui bascule vers l'autre
+UI.VIEWS = {
+  craft = { other = "level", label = "Vue : montée de niveau" },
+  level = { other = "craft", label = "Vue : rentabilité" },
+  ledger = { other = "track", label = "Vue : fiabilité des conseils" },
+  track = { other = "ledger", label = "Vue : mes ventes" },
+}
+UI.PARENT = { level = "craft", track = "ledger" }
 local NO_SCAN = "Pas encore de scan sur ce royaume : ouvre l'HV et clique « Scanner l'HV »."
 local NEEDS_SCAN = { market = true, flip = true, snipe = true, vendor = true, craft = true, level = true }
 
@@ -205,6 +214,31 @@ local MODES = {
     },
     rows = function() return (ns.Ledger.Summary()) end,
   },
+  track = {
+    title = "Fiabilité",
+    tab = false, -- vue de l'onglet Bilan
+    sort = "order",
+    asc = true,
+    help = "Chaque conseil d'achat-revente est noté au scan où il apparaît, puis vérifié sur les scans suivants (3 j ; à stocker : jusqu'au rebond, 14 j au plus). Prix tenu = la revente annoncée était atteignable. Écoulé = le marché a acheté au moins ta quantité à ce prix (estimé : une annulation compte comme une vente). Réussi = les deux. Suivis = tu as acheté l'objet dans les 24 h (courriers d'HV) ; gain réel = tes reventes. /ahl fiabilite pour le détail.",
+    cols = {
+      { "Conseil", 175, function(e) return e.label end, "order" },
+      { "Vérifiés", 50, function(e) return tostring(e.checked) end, "checked", "RIGHT" },
+      { "Réussis", 50, function(e) return e.rate and ((e.rate >= 0.6 and "|cff40ff40" or e.rate >= 0.4 and "|cffffff00" or "|cffff5050") .. ("%.0f%%"):format(e.rate * 100) .. "|r") or "|cff808080—|r" end, "rate", "RIGHT" },
+      { "Prix tenu", 55, function(e) return e.checked > 0 and ("%.0f%%"):format(e.priceOk / e.checked * 100) or "|cff808080—|r" end, "priceOk", "RIGHT" },
+      { "En cours", 50, function(e) return tostring(e.open) end, "open", "RIGHT" },
+      { "Prévu", 80, function(e) return ns.money(e.expect) end, "expect", "RIGHT" },
+      { "Constaté", 80, function(e) return (e.gain >= 0 and "|cff40ff40" or "|cffff5050") .. ns.money(e.gain) .. "|r" end, "gain", "RIGHT" },
+      { "Suivis", 45, function(e) return tostring(e.followed) end, "followed", "RIGHT" },
+      { "Gain réel", 85, function(e) return e.followed > 0 and ((e.realGain >= 0 and "|cff40ff40" or "|cffff5050") .. ns.money(e.realGain) .. "|r") or "|cff808080—|r" end, "realGain", "RIGHT" },
+    },
+    rows = function()
+      local out = {}
+      for _, s in ipairs(ns.Track.Summary()) do
+        if s.checked + s.open + s.nodata + s.followed > 0 then out[#out + 1] = s end
+      end
+      return out
+    end,
+  },
   vendor = {
     title = "Achat PNJ",
     sort = "gpd",
@@ -348,7 +382,7 @@ function UI.Build()
   UI.viewButton = Look.Button(f, "", 160, 22)
   UI.viewButton:SetPoint("TOPRIGHT", -14, -54)
   UI.viewButton:SetScript("OnClick", function()
-    UI.SetMode(UI.mode == "craft" and "level" or "craft")
+    UI.SetMode(UI.VIEWS[UI.mode].other)
   end)
 
   -- Aide : une seule ligne (les longues aides débordaient sur les en-têtes) ; le texte entier
@@ -493,7 +527,7 @@ function UI.SetMode(mode)
   UI.sortKey = MODES[mode].sort
   UI.sortDesc = not MODES[mode].asc
   for key, b in pairs(UI.modeButtons) do
-    ns.Look.Selected(b, key == mode or (mode == "level" and key == "craft"))
+    ns.Look.Selected(b, key == mode or UI.PARENT[mode] == key)
   end
   local cols = MODES[mode].cols
   local x = 14
@@ -522,10 +556,10 @@ function UI.SetMode(mode)
   end
   local isMarket = mode == "market"
   if isMarket then UI.catButton:Show(); UI.liqButton:Show() else UI.catButton:Hide(); UI.liqButton:Hide() end
-  local isCraft = mode == "craft" or mode == "level"
+  local isCraft = UI.VIEWS[mode] ~= nil -- onglet à deux vues : bouton de bascule
   if isCraft then
     UI.viewButton:Show()
-    UI.viewButton:SetText(mode == "craft" and "Vue : montée de niveau" or "Vue : rentabilité")
+    UI.viewButton:SetText(UI.VIEWS[mode].label)
   else
     UI.viewButton:Hide()
   end

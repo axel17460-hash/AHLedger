@@ -24,6 +24,7 @@ Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l
     - **Attendre** : quelqu'un brade sous 85 % du prix habituel.
     - Un objet qui se vend moins d'une fois tous les 2 jours n'est jamais conseillé à l'HV, car chaque expiration coûte le dépôt. Il va au PNJ si le marchand paie au moins la moitié du net HV, sinon il est à garder (ou à tester en 1 seul exemplaire).
   - **Bilan** : tes ventes, achats et expirations des 30 derniers jours, lus dans tes courriers d'HV (il suffit d'ouvrir la boîte aux lettres). Pour chaque objet : solde, prix moyen obtenu et écart avec le prix prévu par l'addon. Dès 5 ventes, la commission et le dépôt réels de Forever sont mesurés sur tes factures et remplacent les valeurs supposées dans tous les calculs. `/ahl bilan` résume le tout dans le chat.
+    - **Vue : fiabilité des conseils** (bouton en haut à droite de l'onglet Bilan) : chaque conseil d'achat-revente (Flip HV tout de suite, à stocker, à tester ; Achat PNJ → HV) est noté au scan où il apparaît, puis vérifié sur les scans suivants pendant 3 jours (à stocker : jusqu'au rebond, 14 jours au plus). **Prix tenu** : le prix de revente annoncé était atteignable (enchère la moins chère restante, hors unités que le conseil t'aurait fait acheter). **Écoulé** : le marché a acheté au moins ta quantité à ce prix ou plus (estimé à partir des enchères disparues, une annulation compte comme une vente). **Réussi** = les deux. Bénéfice constaté = quantité × prix tenu net − coût, à comparer au bénéfice prévu. **Suivis** : tu as acheté l'objet dans les 24 h (courriers d'HV), avec le gain réel de tes reventes. `/ahl fiabilite` l'affiche dans le chat, et le rapport pour Claude le contient. Au bout d'une ou deux semaines, fie-toi aux types de conseil qui réussissent souvent.
   - **Achat PNJ** : objets achetés chez des marchands que tu as déjà ouverts et revendables à profit (commission déduite).
   - **Farm** : tes sessions `/ahl farm start` / `/ahl farm stop`, regroupées par zone et valorisées en or/h aux prix actuels.
   - **Revente PNJ** : les enchères affichées moins cher que ce que le marchand en donne, repérées au dernier scan. Il y a deux types : achat immédiat, et enchère qui se termine dans moins de 2 h. Clique sur une ligne pour lancer la recherche de l'objet dans l'onglet « Parcourir » ; l'achat reste manuel.
@@ -86,7 +87,7 @@ Un addon ne peut pas communiquer avec l'extérieur. AHLedger prépare donc un ra
 - Les seuils de dépeçage des cuirs et écailles (`Professions.lua`) sont approximatifs.
 
 ## Commandes
-`/ahl` · `/ahl options` · `/ahl scan` · `/ahl status` · `/ahl metiers` · `/ahl bilan` · `/ahl claude` · `/ahl diag` · `/ahl monter <métier> [niveau]` · `/ahl farm start|stop` · `/ahl raw on|off` (snapshots bruts pour l'export Python) · `/ahl prune <n>`
+`/ahl` · `/ahl options` · `/ahl scan` · `/ahl status` · `/ahl metiers` · `/ahl bilan` · `/ahl fiabilite` · `/ahl claude` · `/ahl diag` · `/ahl monter <métier> [niveau]` · `/ahl farm start|stop` · `/ahl raw on|off` (snapshots bruts pour l'export Python) · `/ahl prune <n>`
 
 ## Export Python (optionnel)
 ```

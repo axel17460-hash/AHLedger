@@ -321,7 +321,7 @@ function Scan.Diff(prevSigs, sigs, gap)
   local out = {}
   local function bucket(id)
     local b = out[id]
-    if not b then b = { sold = 0, exp = 0, amb = 0, posted = 0, soldVal = 0 }; out[id] = b end
+    if not b then b = { sold = 0, exp = 0, amb = 0, posted = 0, soldVal = 0, lv = {} }; out[id] = b end
     return b
   end
   for sig, prev in pairs(prevSigs) do
@@ -339,6 +339,7 @@ function Scan.Diff(prevSigs, sigs, gap)
       elseif TL_MIN_SECONDS[prev.tl] and gap < TL_MIN_SECONDS[prev.tl] and buyout > 0 then
         b.sold = b.sold + units
         b.soldVal = b.soldVal + gone * buyout
+        b.lv[#b.lv + 1] = { buyout / count, units } -- prix unitaire des unités parties (fiabilité des conseils)
       else
         b.amb = b.amb + units
       end
@@ -413,6 +414,7 @@ function Scan.Finish()
   ns.History.Record(db, now, stats, diff, diff and gap or nil)
   ns.History.RecordRecent(db, now, stats)
   ns.Snipe.FromScan(rows, now)
+  if ns.Track then ns.safe("fiabilité", ns.Track.OnScan, db, now, diff) end
 
   -- Snapshots bruts : seulement pour l'export Python (/ahl raw on), car volumineux
   if AHLedgerDB.keepRaw ~= false then

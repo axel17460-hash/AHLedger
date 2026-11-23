@@ -21,6 +21,7 @@ Professions.lua
 Bags.lua
 Ledger.lua
 Auctions.lua
+Track.lua
 RecipeDB.lua
 RecipesOneForAll.lua
 Export.lua
