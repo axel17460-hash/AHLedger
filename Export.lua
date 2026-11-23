@@ -11,7 +11,7 @@ local _, ns = ...
 local Export = {}
 ns.Export = Export
 
-Export.TOP = { market = 25, rising = 10, flip = 12, craft = 12, bags = 25, ledger = 12, vendor = 8, farm = 6 }
+Export.TOP = { market = 25, rising = 10, flip = 12, craft = 12, bags = 25, auctions = 30, ledger = 12, vendor = 8, farm = 6 }
 
 local function plain(s) return (tostring(s or "?"):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")) end
 -- cuivre -> "12g 34s" / "3s 05c" (sans codes couleur)
@@ -96,12 +96,14 @@ function Export.Build()
   add("")
   add("## Artisanat (recettes connues)")
   local crafts = {}
+  add("classées par or/jour possible : bénéfice × ta part des ventes du marché (25 %), ou 20 fabrications/j revendues au PNJ")
   for _, e in ipairs(A.Crafts()) do if e.profit then crafts[#crafts + 1] = e end end
-  crafts = sorted(crafts, "profit", Export.TOP.craft)
+  crafts = sorted(crafts, "daily", Export.TOP.craft)
   if #crafts == 0 then add("aucune recette relevée (ouvrir les fenêtres de métier)") end
   for _, e in ipairs(crafts) do
-    add("%s (%s, %s) : coût %s, valeur %s (%s), bénéfice %s, %s vendus/j", nameOf(e.id, e.s), ns.Prof.LABEL[e.prof] or e.prof,
-      e.diff or "?", g(e.cost), g(math.max(e.value or 0, e.vendorValue)), e.sellTo or "-", g(e.profit), num(e.perDay))
+    add("%s (%s, %s) : coût %s, valeur %s (%s), bénéfice %s, %s vendus/j, ~%s fabrications/j → %s/j", nameOf(e.id, e.s),
+      ns.Prof.LABEL[e.prof] or e.prof, e.diff or "?", g(e.cost), g(math.max(e.value or 0, e.vendorValue)), e.sellTo or "-",
+      g(e.profit), num(e.perDay), num(e.vol), g(e.daily))
   end
 
   for _, prof in ipairs(ns.Plan.CraftProfs()) do
@@ -110,8 +112,8 @@ function Export.Build()
     if rank and maxRank and rank < maxRank then
       local p = ns.Plan.Level(prof, rank, maxRank)
       add("")
-      add("## Montée %s %d → %d%s : %d fabrications, coût net %s", ns.Prof.LABEL[prof] or prof, p.from, p.reached,
-        p.partial and " (plan partiel, seuils des recettes inconnus)" or "", math.ceil(p.crafts), g(p.total))
+      add("## Montée %s %d → %d%s : %d fabrications, coût net %s (négatif = gain si tout se revend), à avancer %s", ns.Prof.LABEL[prof] or prof,
+        p.from, p.reached, p.partial and " (plan partiel, seuils des recettes inconnus)" or "", math.ceil(p.crafts), g(p.total), g(p.outlay))
       for _, l in ipairs(ns.Plan.Describe(p)) do add("%s", l) end
     end
   end
@@ -124,6 +126,8 @@ function Export.Build()
     add("%s x%d (%s) : %s%s, valeur nette %s — %s", nameOf(e.id, e.s), e.count, e.where, e.action,
       e.post and (" à " .. g(e.post) .. "/u, " .. (e.postQty or e.count) .. " à la fois") or "", g(e.value), plain(e.why))
   end
+
+  Export.MyAuctions(add)
 
   local rows, tot = ns.Ledger.Summary()
   add("")
@@ -139,8 +143,11 @@ function Export.Build()
   local vf = sorted(A.VendorFlips(), "gpd", Export.TOP.vendor)
   if #vf == 0 then add("aucun") end
   for _, e in ipairs(vf) do
-    add("%s : achat %s chez %s (%s), revente %s, marge %s/u, %s vendus/j", nameOf(e.id, e.s), g(e.buy), plain(e.npc), plain(e.zone),
-      g(e.s.price), g(e.margin), num(e.perDay))
+    local tail
+    if e.realSold then tail = (" · toi : %d vendus à %s, %d expirés"):format(e.realSold, g(e.realAvg), e.realExpired or 0) else tail = "" end
+    local verdict = e.reliable and "fiable" or ("à tester (%s) : %d u d'abord"):format(e.why, e.testQty or 1)
+    add("%s : achat %s chez %s (%s), revente %s (×%.0f), marge nette %s/u, %s vendus/j dans tout l'HV (vise %s/j) — %s%s",
+      nameOf(e.id, e.s), g(e.buy), plain(e.npc), plain(e.zone), g(e.s.price), e.markup, g(e.margin), num(e.perDay), num(e.vol), verdict, tail)
   end
 
   add("")
@@ -169,6 +176,48 @@ function Export.Build()
   end
   add("Question : d'après ces données, que dois-je faire en priorité pour gagner de l'or (vendre, acheter, fabriquer, farmer) ?")
   return table.concat(L, "\n")
+end
+
+-- Ce que tu as en vente en ce moment, comparé au dernier scan
+function Export.MyAuctions(add)
+  add("")
+  local groups, t = ns.Auctions.Summary()
+  if not groups then
+    add("## Mes enchères en cours")
+    add("liste jamais relue : ouvre l'HV une fois pour que l'addon voie tes enchères")
+    return
+  end
+  local age = time() - t
+  add("## Mes enchères en cours (liste relue le %s%s)", date("%d/%m %H:%M", t),
+    age > 2 * 86400 and ", ancienne : ouvre l'HV pour la mettre à jour" or "")
+  local up, upValue, soldValue, under = 0, 0, 0, 0
+  for _, gr in ipairs(groups) do
+    if gr.isSold then soldValue = soldValue + gr.value
+    else
+      up, upValue = up + gr.auctions, upValue + gr.value
+      if gr.status == "sous-coté" then under = under + 1 end
+    end
+  end
+  if #groups == 0 then add("aucune enchère en cours"); return end
+  add("%d enchères en cours, %s net si tout part ; %d lots sous-cotés ; vendu en attente au courrier : %s",
+    up, g(upValue), under, g(soldValue))
+  table.sort(groups, function(a, b) return a.value > b.value end)
+  for i = 1, math.min(#groups, Export.TOP.auctions) do
+    local gr = groups[i]
+    local s = gr.s
+    local left = gr.left and math.max(gr.left - age, 0)
+    local price = gr.unit and (g(gr.unit) .. "/u") or ("enchère " .. g(gr.bid))
+    local market = s and (" · marché : moins cher %s, prix réel %s, %s vendus/j"):format(g(s.minNow), g(s.price), num(s.perDay)) or ""
+    local verdict = gr.status
+    if gr.gap then verdict = ("%s (%s)"):format(gr.status, pct(gr.gap)) end
+    if gr.isSold then
+      add("%s x%d : vendu à %s, %s net à récupérer au courrier", nameOf(gr.id, s), gr.qty, price, g(gr.value))
+    else
+      add("%s x%d (%d enchère%s) : %s, reste %s, %s%s%s, net si tout part %s", nameOf(gr.id, s), gr.qty, gr.auctions,
+        gr.auctions > 1 and "s" or "", price, left and ns.Auctions.LeftText(left) or "?", verdict, market,
+        gr.days and (", ~%.1f j pour tout vendre à 25 %% du marché"):format(gr.days) or "", g(gr.value))
+    end
+  end
 end
 
 function Export.Save()

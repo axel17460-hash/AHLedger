@@ -250,20 +250,55 @@ function Analysis.Get(id)
 end
 
 -- Achat chez un PNJ -> revente HV
+-- Un objet vendu par un PNJ a un plafond naturel : tout acheteur peut aller le chercher au marchand.
+-- On ne retient donc que ce qui a vraiment été vu partir à ce prix, et on reste prudent sur le volume.
+Analysis.VENDOR_SHARE = 0.25     -- part du marché qu'on peut espérer prendre face aux autres vendeurs
+Analysis.VENDOR_MARKUP_WARN = 5  -- revente à plus de 5× le prix PNJ : peu d'acheteurs, à tester petit
+Analysis.VENDOR_MIN_DAYS = 3     -- jours de données mini avant de faire confiance au volume
+
+-- Ventes réelles (courriers d'HV) par objet, pour confirmer ou démentir une estimation
+function Analysis.RealSales()
+  local by = {}
+  if not (ns.Ledger and ns.Ledger.Summary) then return by end
+  for _, r in ipairs((ns.Ledger.Summary())) do if r.id then by[r.id] = r end end
+  return by
+end
+
+function Analysis.VendorFlip(id, s, v, real)
+  if not (s and v and v.p and v.p > 0) then return nil end  -- relevé PNJ absent ou arrondi à 0c (ancienne version)
+  local margin = s.netExp - v.p                             -- commission et dépôts perdus déduits
+  if margin < 1 then return nil end
+  local cap = (v.lim and v.lim > 0) and v.lim or math.huge
+  local vol = math.min((s.perDay or 0) * Analysis.VENDOR_SHARE, cap)
+  local e = { id = id, s = s, buy = v.p, margin = margin, roi = margin / v.p, markup = s.price / v.p,
+              perDay = s.perDay, vol = vol, npc = v.npc, zone = v.zone, lim = v.lim }
+  local why = {}
+  if not s.realPrice then why[#why + 1] = "aucune vente vue à ce prix" end
+  if (s.days or 0) < Analysis.VENDOR_MIN_DAYS then why[#why + 1] = ("%d j de données"):format(s.days or 0) end
+  if s.sellThrough and s.sellThrough < 0.5 then why[#why + 1] = ("écoulement %.0f%%"):format(s.sellThrough * 100) end
+  if e.markup >= Analysis.VENDOR_MARKUP_WARN then
+    why[#why + 1] = ("%.0f× le prix PNJ, acheteurs rares ?"):format(e.markup)
+  end
+  local r = real and real[id]
+  if r and r.sold > 0 then
+    e.realSold, e.realAvg, e.realExpired = r.sold, r.avgSale, r.expired
+    -- tes propres ventes tranchent : confirmé si au moins 2/3 de tes mises en vente sont parties
+    if r.sold >= 2 * r.expired then why = {} else why[#why + 1] = ("%d expirés chez toi"):format(r.expired) end
+  end
+  e.reliable = #why == 0
+  e.why = table.concat(why, ", ")
+  if not e.reliable then e.testQty = math.max(1, math.min(20, math.ceil(vol))) end
+  e.gpd = margin * vol * (s.confidence or 1) * (e.reliable and 1 or 0.5)
+  return e
+end
+
 function Analysis.VendorFlips()
   local db, out = ns.realmDB(), {}
   local all = Analysis.All().byId
-  for id, v in pairs(db.vendor) do
-    local s = all[id]
-    if s then
-      local margin = s.net - v.p
-      if margin > 0 then
-        local cap = (v.lim and v.lim > 0) and v.lim or math.huge
-        local vol = math.min(s.perDay or 0, cap)
-        out[#out + 1] = { id = id, s = s, buy = v.p, margin = margin, roi = margin / math.max(v.p, 1),
-                          perDay = s.perDay, gpd = margin * vol, npc = v.npc, zone = v.zone, lim = v.lim }
-      end
-    end
+  local real = Analysis.RealSales()
+  for id, v in pairs(db.vendor or {}) do
+    local e = Analysis.VendorFlip(id, all[id], v, real)
+    if e then out[#out + 1] = e end
   end
   return out
 end
@@ -353,6 +388,7 @@ function Analysis.ReagentCost(id)
 end
 
 -- Artisanat : recettes relevées à l'ouverture de tes fenêtres de métier
+Analysis.CRAFT_VENDOR_PER_DAY = 20 -- fabrications par jour qu'on compte pour une recette revendue au PNJ
 function Analysis.Crafts()
   local out = {}
   for prof, list in pairs(ns.Prof and ns.Prof.Recipes() or {}) do
@@ -373,6 +409,10 @@ function Analysis.Crafts()
         e.profit = best - e.cost
         e.roi = e.profit / math.max(e.cost, 1)
         e.sellTo = (value or 0) >= vsell and "HV" or "PNJ"
+        -- ce que la recette peut te rapporter par jour : à l'HV, ta part des ventes du marché
+        -- (une recette rentable que personne n'achète ne rapporte rien) ; au PNJ, une quantité fixe
+        e.vol = e.sellTo == "HV" and (s and s.perDay or 0) * Analysis.VENDOR_SHARE / made or Analysis.CRAFT_VENDOR_PER_DAY
+        e.daily = math.max(e.profit, 0) * e.vol
       end
       out[#out + 1] = e
     end

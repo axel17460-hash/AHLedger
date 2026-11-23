@@ -52,6 +52,10 @@ Diag.FEATURES = {
     { "Factures", { "GetInboxNumItems", "GetInboxHeaderInfo", "GetInboxInvoiceInfo", "GetInboxItemLink",
                     "AUCTION_EXPIRED_MAIL_SUBJECT" } },
   } },
+  { "Mes enchères", {
+    { "Retail", { "C_AuctionHouse.GetNumOwnedAuctions", "C_AuctionHouse.GetOwnedAuctionInfo" } },
+    { "Classic", { "GetNumAuctionItems", "GetAuctionItemInfo" } },
+  } },
   { "Niveaux de métier", {
     { "Classic", { "GetNumSkillLines", "GetSkillLineInfo" } },
     { "Retail", { "GetProfessions", "GetProfessionInfo" } },

@@ -22,6 +22,14 @@ local DIFF = { optimal = "|cffff8040orange|r", medium = "|cffffff00jaune|r", eas
 local ADVICE = { ["Vendre HV"] = "|cff40ff40Vendre HV|r", Garder = "|cff66ccffGarder|r", PNJ = "|cffffd100PNJ|r",
                  Attendre = "|cffff8040Attendre|r" }
 
+-- « +45 % » coloré comme les pastilles des sacs : vert mieux à l'HV, jaune pareil, rouge au PNJ
+function UI.CompareCell(c)
+  if not c then return "|cff808080—|r" end
+  local col = ns.Bags.COLORS[c.kind]
+  local hex = ("|cff%02x%02x%02x"):format(col[1] * 255, col[2] * 255, col[3] * 255)
+  return hex .. (c.gain and ("%+.0f%%"):format(c.gain * 100) or "HV seul") .. "|r"
+end
+
 local function share(v) return v and ("%.0f%%"):format(v * 100) or "|cff808080—|r" end
 
 local function itemLabel(id, s)
@@ -85,15 +93,15 @@ local MODES = {
   },
   craft = {
     title = "Artisanat",
-    sort = "profit",
-    help = "Tes recettes (ouvre chaque fenêtre de métier une fois). Coût = composants au moins cher entre PNJ et HV ; valeur = HV nette ou PNJ. Orange/jaune = gain de compétence.",
+    sort = "daily",
+    help = "Tes recettes (ouvre chaque fenêtre de métier une fois). Coût = composants au moins cher entre PNJ et HV ; valeur = HV nette ou PNJ. Or/j = bénéfice × ta part des ventes du marché (25 %), ou 20 fabrications/j au PNJ. Orange/jaune = gain de compétence.",
     cols = {
-      { "Recette", 165, function(e) return itemLabel(e.id, e.s) end, "name" },
+      { "Recette", 150, function(e) return itemLabel(e.id, e.s) end, "name" },
       { "Métier", 62, function(e) return ns.Prof.LABEL[e.prof] or e.prof end, "prof" },
       { "Coût", 78, function(e) return e.cost and ns.money(e.cost) or ("|cff808080%d prix ?|r"):format(e.missing) end, "cost", "RIGHT" },
       { "Valeur", 78, function(e) return ns.money(math.max(e.value or 0, e.vendorValue)) end, "value", "RIGHT" },
       { "Bénéfice", 78, function(e) return e.profit and ((e.profit >= 0 and "|cff40ff40" or "|cffff5050") .. ns.money(e.profit) .. "|r") or "-" end, "profit", "RIGHT" },
-      { "ROI", 45, function(e) return e.roi and ("%.0f%%"):format(e.roi * 100) or "-" end, "roi", "RIGHT" },
+      { "Or/j", 60, function(e) return e.daily and ns.money(e.daily) or "-" end, "daily", "RIGHT" },
       { "Vendre", 42, function(e) return e.sellTo or "-" end, "sellTo" },
       { "Vendus/j", 52, function(e) return num(e.perDay) end, "perDay", "RIGHT" },
       { "Niveau", 55, function(e) return DIFF[e.diff] or "-" end, "diff" },
@@ -127,7 +135,7 @@ local MODES = {
   bags = {
     title = "Mes objets",
     sort = "value",
-    help = "Tes sacs (et ta banque, relue à chaque visite) : vendre à l'HV au prix indiqué, garder, vendre au PNJ ou attendre que le marché remonte.",
+    help = "Tes sacs (et ta banque, relue à chaque visite) : vendre à l'HV au prix indiqué, garder, vendre au PNJ ou attendre que le marché remonte. HV/PNJ : ce que l'HV rapporte de plus (net) que le marchand ; vert au-delà de +10 %, jaune entre −10 et +10 %, rouge en dessous.",
     cols = {
       { "Objet", 160, function(e) return itemLabel(e.id, e.s) end, "name" },
       { "Qté", 40, function(e) return tostring(e.count) end, "count", "RIGHT" },
@@ -136,9 +144,17 @@ local MODES = {
       { "Prix conseillé/u", 90, function(e) return e.post and ns.money(e.post) or "-" end, "post", "RIGHT" },
       { "À poster", 50, function(e) return e.postQty and tostring(e.postQty) or "-" end, "postQty", "RIGHT" },
       { "Valeur nette", 82, function(e) return ns.money(e.value) end, "value", "RIGHT" },
-      { "Pourquoi", 190, function(e) return e.why or "" end, "why" },
+      { "HV/PNJ", 55, function(e) return UI.CompareCell(e.cmp) end, "cmpGain", "RIGHT" },
+      { "Pourquoi", 130, function(e) return e.why or "" end, "why" },
     },
-    rows = function() return ns.Bags.Advice() end,
+    rows = function()
+      local out = ns.Bags.Advice()
+      for _, e in ipairs(out) do
+        e.cmp = ns.Bags.Compare(e.id)
+        e.cmpGain = e.cmp and (e.cmp.gain or math.huge) or nil
+      end
+      return out
+    end,
   },
   ledger = {
     title = "Bilan",
@@ -167,9 +183,9 @@ local MODES = {
   vendor = {
     title = "Achat PNJ",
     sort = "gpd",
-    help = "Objets achetables chez un marchand déjà visité et revendables à profit à l'HV (commission déduite).",
+    help = "Objets achetables chez un marchand déjà visité et revendables à profit à l'HV (commission et dépôts déduits). « à tester » : peu de ventes vues, essaie une petite quantité. Survole une ligne pour le détail.",
     cols = {
-      { "Objet", 170, function(e) return itemLabel(e.id, e.s) end, "name" },
+      { "Objet", 170, function(e) return itemLabel(e.id, e.s) .. (e.reliable and "" or " |cffff9900(à tester)|r") end, "name" },
       { "Achat PNJ/u", 85, function(e) return ns.money(e.buy) end, "buy", "RIGHT" },
       { "Revente/u", 85, function(e) return ns.money(e.s.price) end, "price", "RIGHT" },
       { "Marge/u", 85, function(e) return ns.money(e.margin) end, "margin", "RIGHT" },
@@ -491,6 +507,7 @@ end
 
 -- Rafraîchit l'affichage après un scan
 function UI.OnData()
+  if ns.BagMarks and ns.ahOpen then ns.BagMarks.Refresh() end
   if UI.content and UI.content:IsVisible() then UI.Refresh() end
 end
 

@@ -92,7 +92,8 @@ end
 
 -- Coût net d'une fabrication : composants (le moins cher PNJ/HV) − ce que rapporte l'objet fabriqué
 -- (HV nette si le marché l'absorbe, sinon prix PNJ). Renvoie nil si un composant n'a pas de prix.
--- 4e et 5e retours : valeur au PNJ, et nombre de fabrications que l'HV absorbe (2 jours de ventes).
+-- 4e et 5e retours : valeur au PNJ, et nombre de fabrications que l'HV absorbe : ta part (Analysis.VENDOR_SHARE)
+-- de 2 jours de ventes. Au-delà, l'objet se revend au PNJ.
 function Plan.CraftCost(rec)
   local cost = 0
   for rid, n in pairs(rec.r) do
@@ -106,7 +107,7 @@ function Plan.CraftCost(rec)
   local vendor = (meta and meta.s or 0) * made
   local ah = (s and s.perDay and s.perDay >= 1) and math.max(s.netExp, 0) * made or 0
   local value = math.max(vendor, ah)
-  local cap = ah > vendor and math.floor((s.perDay or 0) * 2 / made) or 0
+  local cap = ah > vendor and math.floor((s.perDay or 0) * 2 * ns.Analysis.VENDOR_SHARE / made) or 0
   return cost - value, cost, value, vendor, cap
 end
 
@@ -120,7 +121,7 @@ function Plan.Level(prof, fromRank, toRank)
   end
   -- au-delà de ce que l'HV absorbe, l'objet fabriqué ne se revend plus qu'au PNJ
   local function netNow(c) return c.done < c.cap and c.net or c.cost - c.vendor end
-  local steps, total, crafts, learnedNow = {}, 0, 0, {}
+  local steps, total, crafts, learnedNow, outlay = {}, 0, 0, {}, 0
   local rank = fromRank
   local partial = false
   while rank < toRank do
@@ -129,9 +130,12 @@ function Plan.Level(prof, fromRank, toRank)
       local learnable = rec.learned or (rec.source and rec.source.cost)
       local chance = learnable and Plan.Chance(rec, rank, fromRank) or 0
       if chance > 0 then
-        -- coût par point espéré ; une recette à acheter est pénalisée de son prix réparti sur 10 points
+        -- coût par point espéré ; une recette à acheter est pénalisée de son prix réparti sur 10 points.
+        -- Un bénéfice ne compte qu'une fois par point : sinon une recette presque grise mais rentable
+        -- gagne parce qu'elle demande beaucoup de fabrications (et donc beaucoup d'objets à revendre).
         local learnCost = (not rec.learned and not learnedNow[rec]) and rec.source.cost or 0
-        local score = netNow(c) / chance + learnCost / 10
+        local net = netNow(c)
+        local score = math.max(net, 0) / chance + math.min(net, 0) + learnCost / 10
         if not best or score < bestScore then best, bestScore, bestChance = rec, score, chance end
       end
     end
@@ -141,10 +145,11 @@ function Plan.Level(prof, fromRank, toRank)
     local n = 1 / bestChance
     local last = steps[#steps]
     if not (last and last.rec == best) then
-      last = { rec = best, from = rank, to = rank, crafts = 0, cost = 0, learnCost = 0 }
+      last = { rec = best, from = rank, to = rank, crafts = 0, cost = 0, learnCost = 0, outlay = 0 }
       if not best.learned and not learnedNow[best] then
         last.learnCost = best.source.cost
         total = total + best.source.cost
+        outlay = outlay + best.source.cost
         learnedNow[best] = true
       end
       steps[#steps + 1] = last
@@ -154,6 +159,8 @@ function Plan.Level(prof, fromRank, toRank)
     local net = netNow(c)
     c.done = c.done + n
     last.cost = last.cost + net * n
+    last.outlay = last.outlay + c.cost * n   -- composants à acheter avant de revendre quoi que ce soit
+    outlay = outlay + c.cost * n
     crafts = crafts + n
     total = total + net * n
     rank = rank + 1
@@ -163,7 +170,8 @@ function Plan.Level(prof, fromRank, toRank)
     st.mats = {}
     for rid, q in pairs(st.rec.r) do st.mats[rid] = q * st.craftsRounded end
   end
-  return { steps = steps, total = total, crafts = crafts, reached = rank, partial = partial, from = fromRank, to = toRank }
+  return { steps = steps, total = total, crafts = crafts, reached = rank, partial = partial, from = fromRank, to = toRank,
+           outlay = outlay }
 end
 
 -- Recettes classées par coût d'un point de compétence au niveau actuel (onglet Artisanat, vue « Montée »)
@@ -212,7 +220,7 @@ function Plan.Describe(p)
     table.sort(mats)
     lines[#lines + 1] = ("%d - %d : %s ×%d (%s)%s — %s"):format(st.from, st.to, itemName(st.rec.out), st.craftsRounded,
       table.concat(mats, ", "), st.learnCost > 0 and (" + recette " .. plain(ns.money(st.learnCost))) or "",
-      st.cost >= 0 and ("coût net " .. plain(ns.money(st.cost))) or ("gain " .. plain(ns.money(-st.cost))))
+      st.cost >= 0 and ("coût net " .. plain(ns.money(st.cost))) or ("gain " .. plain(ns.money(-st.cost)) .. " si tout se revend"))
   end
   return lines
 end
@@ -229,8 +237,8 @@ function Plan.Command(args)
   if not rank then ns.print("Métier inconnu pour ce personnage : " .. prof); return end
   local maxRank = ns.Prof.Char().max and ns.Prof.Char().max[prof] or rank + 25
   local p = Plan.Level(prof, rank, tonumber(target) or maxRank)
-  ns.print(("Montée %s %d - %d : %d fabrications, coût net %s"):format(ns.Prof.LABEL[prof] or prof, p.from, p.reached,
-    math.ceil(p.crafts), plain(ns.money(p.total))))
+  ns.print(("Montée %s %d - %d : %d fabrications, coût net %s, à avancer %s"):format(ns.Prof.LABEL[prof] or prof, p.from, p.reached,
+    math.ceil(p.crafts), plain(ns.money(p.total)), plain(ns.money(p.outlay))))
   for _, l in ipairs(Plan.Describe(p)) do ns.print("  " .. l) end
   if p.partial then
     ns.print("|cffffd100Plan partiel : sans base de recettes (seuils jaune/vert/gris), seule la couleur actuelle de tes recettes est connue. Branche un addon de recettes pour le plan complet.|r")

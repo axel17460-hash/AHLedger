@@ -2,7 +2,7 @@
 ## Title: AHLedger
 ## Notes: Collecte de données d'hôtel des ventes, prix vendeurs et sessions de farm pour analyse hors jeu.
 ## Author: Axel
-## Version: 0.8.0
+## Version: 0.8.1
 ## SavedVariables: AHLedgerDB
 ## OptionalDeps: Auctionator, DaylightUI, DaylightUI_AuctionHouse, OneForAll
 
@@ -18,6 +18,7 @@ Farm.lua
 Professions.lua
 Bags.lua
 Ledger.lua
+Auctions.lua
 RecipeDB.lua
 RecipesOneForAll.lua
 Export.lua
@@ -25,4 +26,5 @@ Diag.lua
 Snipe.lua
 Bridge.lua
 Tooltip.lua
+BagMarks.lua
 UI.lua

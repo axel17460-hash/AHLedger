@@ -16,7 +16,6 @@ Ledger.MIN_CALIB = 5        -- ventes nécessaires pour faire confiance à la co
 function Ledger.DB()
   local db = ns.realmDB()
   db.ledger = db.ledger or {}
-  db.ledgerSeen = db.ledgerSeen or {}
   return db
 end
 
@@ -45,57 +44,78 @@ local function subjectPattern(global)
   return "^" .. global:gsub("([%(%)%.%-%+%*%?%[%]%^%$])", "%%%1"):gsub("%%s", "(.+)") .. "$"
 end
 
--- Un courrier n'a pas d'identifiant : on le reconnaît à son sujet, son montant et sa date
--- d'expiration (fixe, contrairement à « jours restants »). Plusieurs courriers identiques
--- (même pile vendue au même prix) sont comptés chacun une fois.
+-- Un courrier n'a pas d'identifiant : on le reconnaît à sa facture (type, objet, montant, quantité,
+-- commission, dépôt) et à sa date d'expiration (fixe, contrairement à « jours restants »). Les lignes
+-- du bilan servent elles-mêmes de liste des courriers déjà vus : une ligne qui a la même facture et
+-- la même expiration (à EXPIRY_TOLERANCE près) est ce courrier. Le montant d'argent du courrier
+-- n'entre pas dans la clé : il tombe à 0 quand tu récupères l'or, et le courrier serait recompté.
+-- Plusieurs courriers identiques (même pile vendue au même prix) sont comptés chacun une fois.
 Ledger.EXPIRY_TOLERANCE = 300
 
-local function mailBase(subject, money) return (subject or "") .. "|" .. (money or 0) end
+local function sameMail(a, b)
+  return a.k == b.k and a.n == b.n and a.c == b.c and (a.g or 0) == (b.g or 0)
+    and (a.cut or 0) == (b.cut or 0) and (a.dep or 0) == (b.dep or 0)
+end
+
+-- Lit le courrier i. Renvoie la ligne de bilan, ou nil si ce n'est pas un courrier d'HV.
+-- GetInboxInvoiceInfo : type, objet, joueur, enchère, rachat, dépôt, commission, délai, heure, minute,
+-- quantité (11e retour, comme le lisent TSM et Daylight UI). Le prix payé est l'enchère : sur Forever,
+-- le champ « rachat » d'une vente de pile ne contient pas le prix. Si l'enchère manque ou paraît fausse
+-- (inférieure à la commission), on la recalcule depuis l'argent du courrier : or reçu = prix + dépôt − commission.
+function Ledger.ReadMail(i, expiredPat)
+  local _, _, _, subject, money = GetInboxHeaderInfo(i)
+  if not subject then return nil end
+  local kind, itemName, bid, buyout, deposit, consignment, count
+  if GetInboxInvoiceInfo then
+    kind, itemName, _, bid, buyout, deposit, consignment, _, _, _, count = GetInboxInvoiceInfo(i)
+  end
+  if kind == "seller" or kind == "buyer" then
+    local name, c = splitCount(itemName)
+    deposit, consignment = deposit or 0, consignment or 0
+    local gross = (bid and bid > 0) and bid or nil
+    if kind == "seller" and (not gross or gross < consignment) and money and money > 0 then
+      gross = money - deposit + consignment
+    end
+    gross = gross or ((buyout and buyout > 0) and buyout or 0)
+    count = tonumber(count)
+    if not count or count < 1 then count = c or 1 end
+    return { k = kind == "seller" and "sold" or "bought", n = name, id = idForName(name), c = count,
+             g = gross, dep = deposit, cut = consignment }
+  elseif expiredPat and subject:match(expiredPat) then
+    local link = GetInboxItemLink and GetInboxItemLink(i, 1)
+    local name, c = splitCount(subject:match(expiredPat))
+    local cnt
+    if GetInboxItem then cnt = select(4, GetInboxItem(i, 1)) end
+    return { k = "expired", n = name, id = ns.itemIdFromLink(link) or idForName(name), c = tonumber(cnt) or c or 1 }
+  end
+end
 
 function Ledger.ReadInbox()
   if not (GetInboxNumItems and GetInboxHeaderInfo) then return 0 end
   local db = Ledger.DB()
+  Ledger.Repair()
   local expiredPat = subjectPattern(AUCTION_EXPIRED_MAIL_SUBJECT)
   local added, used = 0, {}
   for i = 1, GetInboxNumItems() do
-    local _, _, _, subject, money, _, daysLeft = GetInboxHeaderInfo(i)
-    local base = mailBase(subject, money)
-    local expiry = time() + (daysLeft or 0) * 86400
-    local known = db.ledgerSeen[base]
-    local seen = false
-    for j, x in ipairs(known or {}) do
-      local tag = base .. "#" .. j
-      if not used[tag] and math.abs(x - expiry) <= Ledger.EXPIRY_TOLERANCE then
-        used[tag], seen = true, true
-        break
+    local e = Ledger.ReadMail(i, expiredPat)
+    if e then
+      local daysLeft = select(7, GetInboxHeaderInfo(i))
+      e.x = math.floor(time() + (daysLeft or 0) * 86400)
+      -- déjà enregistré ? (ligne sans expiration : relevée par une ancienne version, réclamée une fois)
+      local match
+      for _, old in ipairs(db.ledger) do
+        if not used[old] and sameMail(old, e) and (old.x == nil or math.abs(old.x - e.x) <= Ledger.EXPIRY_TOLERANCE) then
+          match = old
+          break
+        end
       end
-    end
-    if subject and not seen then
-      local e
-      local kind, itemName, bid, buyout, deposit, consignment, count
-      if GetInboxInvoiceInfo then
-        kind, itemName, _, bid, buyout, deposit, consignment, _, _, count = GetInboxInvoiceInfo(i)
-      end
-      if kind == "seller" or kind == "buyer" then
-        local name, c = splitCount(itemName)
-        e = { k = kind == "seller" and "sold" or "bought", n = name, c = count or c or 1,
-              g = kind == "seller" and (buyout and buyout > 0 and buyout or bid) or (bid or 0),
-              dep = deposit or 0, cut = consignment or 0 }
-        e.id = idForName(name)
-      elseif expiredPat and subject:match(expiredPat) then
-        local link = GetInboxItemLink and GetInboxItemLink(i, 1)
-        local name, c = splitCount(subject:match(expiredPat))
-        local cnt
-        if GetInboxItem then cnt = select(4, GetInboxItem(i, 1)) end
-        e = { k = "expired", n = name, id = ns.itemIdFromLink(link) or idForName(name), c = tonumber(cnt) or c or 1 }
-      end
-      if e then
+      if match then
+        used[match] = true
+        match.x = match.x or e.x
+      else
         e.t = time()
         db.ledger[#db.ledger + 1] = e
-        known = known or {}
-        known[#known + 1] = expiry
-        db.ledgerSeen[base] = known
-        used[base .. "#" .. #known] = true
+        used[e] = true
         added = added + 1
       end
     end
@@ -109,19 +129,46 @@ function Ledger.ReadInbox()
   return added
 end
 
+-- Réparation des lignes relevées avant la version 0.8.1 : la quantité était lue dans le 10e retour
+-- de la facture (la minute de livraison, souvent 0), le prix dans le champ « rachat » (sur Forever,
+-- la quantité de la pile), et un courrier était recompté quand tu récupérais son or.
+-- Prix réel = commission / 5 % (vérifié en jeu sur les ventes d'équipement, où le rachat était juste).
+Ledger.REPAIR_VERSION = 1
+Ledger.FOREVER_CUT = 0.05
+function Ledger.Repair()
+  local db = Ledger.DB()
+  if (db.ledgerFix or 0) >= Ledger.REPAIR_VERSION then return 0 end
+  local fixed, keep = 0, {}
+  for _, e in ipairs(db.ledger) do
+    if e.k ~= "expired" and (e.c or 0) < 1 then
+      fixed = fixed + 1
+      if e.k == "sold" and (e.cut or 0) > 0 and (e.g or 0) < e.cut then
+        e.c = math.max(1, e.g or 1)                       -- le champ lu contenait la quantité
+        e.g = math.floor(e.cut / Ledger.FOREVER_CUT + 0.5)
+      else
+        e.c = 1
+      end
+    end
+    -- doublon : même facture relevée deux fois en moins de 10 minutes
+    local dup = false
+    for _, k in ipairs(keep) do
+      if sameMail(k, e) and math.abs((k.t or 0) - (e.t or 0)) <= 600 then dup = true; break end
+    end
+    if dup then fixed = fixed + 1 else keep[#keep + 1] = e end
+  end
+  db.ledger = keep
+  db.ledgerSeen = nil
+  db.ledgerFix = Ledger.REPAIR_VERSION
+  Ledger.Calibrate()
+  return fixed
+end
+
 function Ledger.Prune()
   local db = Ledger.DB()
   local limit = time() - Ledger.KEEP_DAYS * 86400
   local keep = {}
   for _, e in ipairs(db.ledger) do if e.t >= limit then keep[#keep + 1] = e end end
   db.ledger = keep
-  -- un courrier expiré ne peut plus réapparaître dans la boîte
-  local now = time()
-  for k, list in pairs(db.ledgerSeen) do
-    local keep2 = {}
-    for _, x in ipairs(list) do if x > now - 86400 then keep2[#keep2 + 1] = x end end
-    db.ledgerSeen[k] = #keep2 > 0 and keep2 or nil
-  end
 end
 
 -- Commission et dépôt réels, mesurés sur les factures de vente
@@ -191,7 +238,7 @@ function Ledger.Summary()
 end
 
 ns.on("MAIL_INBOX_UPDATE", function() Ledger.ReadInbox() end)
-ns.on("PLAYER_LOGIN", function() Ledger.Calibrate() end)
+ns.on("PLAYER_LOGIN", function() Ledger.Repair(); Ledger.Calibrate() end)
 
 function Ledger.Report()
   local _, tot = Ledger.Summary()

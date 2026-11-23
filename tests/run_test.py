@@ -235,16 +235,18 @@ mage = ns.Analysis.Get(4338)
 assert adv[4338].action == "Vendre HV" and adv[4338].post == (mage.minNow - 1 if mage.minNow else int(mage.price)) and adv[4338].postQty == 30
 ns.UI.SetMode("bags"); assert ns.UI.rows[1].shown
 
-# Bilan : courriers d'HV (6 ventes, 1 achat, 1 expiration), relus deux fois sans doublon,
-# puis calibrage de la commission (7 %) et du dépôt (15 % du prix PNJ)
+# Bilan : courriers d'HV (6 ventes, 1 achat, 1 expiration), relus deux fois sans doublon, puis une
+# troisième fois après avoir récupéré l'or (montant du courrier à 0) ; calibrage de la commission (7 %)
+# et du dépôt (15 % du prix PNJ). Factures au format de Forever : quantité en 11e retour, et le champ
+# « rachat » d'une pile contient la quantité, pas le prix.
 lua.execute("""
 AUCTION_EXPIRED_MAIL_SUBJECT = "Auction expired: %s"
 MAILS = {}
 for i = 1, 6 do
   MAILS[#MAILS + 1] = { subject = "Auction successful: Mageweave Cloth (20)", money = 20000 - 1400 + 750,
-    inv = { "seller", "Mageweave Cloth (20)", "Acheteur", 20000, 20000, 750, 1400, 0, 0 } }
+    inv = { "seller", "Mageweave Cloth (20)", "Acheteur", 20000, 20, 750, 1400, 0, 0, 0, 20 } }
 end
-MAILS[#MAILS + 1] = { subject = "Auction won: Silk Cloth", money = 0, inv = { "buyer", "Silk Cloth (20)", "Bradeur", 10000, 10000, 0, 0, 0, 0, 20 } }
+MAILS[#MAILS + 1] = { subject = "Auction won: Silk Cloth", money = 0, inv = { "buyer", "Silk Cloth (20)", "Bradeur", 10000, 20, 0, 0, 0, 0, 0, 20 } }
 MAILS[#MAILS + 1] = { subject = "Auction expired: Healing Potion (5)", money = 0, item = 929 }
 GetInboxNumItems = function() return #MAILS end
 GetInboxHeaderInfo = function(i) local m = MAILS[i]; return nil, nil, "Hôtel des ventes", m.subject, m.money, 0, 29.5 end
@@ -252,6 +254,8 @@ GetInboxInvoiceInfo = function(i) local m = MAILS[i]; if m.inv then return unpac
 GetInboxItemLink = function(i) local m = MAILS[i]; return m.item and ("|Hitem:" .. m.item .. "::::|h") end
 GetInboxItem = function(i) return "Healing Potion", 929, nil, 5 end
 fire("MAIL_INBOX_UPDATE"); advance(60); fire("MAIL_INBOX_UPDATE")
+for _, m in ipairs(MAILS) do m.money = 0 end
+advance(15); fire("MAIL_INBOX_UPDATE")
 """)
 rows = {(r.id or r.name): r for r in ns.Ledger.Summary()[0].values()}
 print("Bilan tisse-mage :", rows[4338].sold, rows[4338].revenue, "| soie achetée :", rows[4306].bought, "| potions expirées :", rows[929].expired)
@@ -262,11 +266,76 @@ ns.UI.SetMode("ledger"); print(strip(ns.UI.help.text))
 lua.execute("SlashCmdList.AHLEDGER('bilan')")
 print(strip(list(lua.eval("LOG").values())[-1]))
 
+# Réparation des lignes relevées par la 0.8.0 (quantité 0, prix = quantité, doublons)
+rep = lua.eval("""function(ns)
+  local db = ns.Ledger.DB()
+  local saved, savedFix = db.ledger, db.ledgerFix
+  db.ledger = {
+    { k = "sold", n = "Silk Cloth", c = 0, g = 40, cut = 394, dep = 1200, t = 1000 },
+    { k = "sold", n = "Silk Cloth", c = 0, g = 40, cut = 394, dep = 1200, t = 1015 },
+    { k = "sold", n = "Claymore", c = 0, g = 12343, cut = 617, dep = 1859, t = 1000 },
+    { k = "bought", n = "Keen Raptor Tooth", c = 0, g = 1800, cut = 0, dep = 0, t = 1000 },
+    { k = "expired", n = "Hulking Leggings", c = 1, t = 1000 },
+  }
+  db.ledgerFix = nil
+  local fixed = ns.Ledger.Repair()
+  local L = db.ledger
+  local out = { fixed, #L, L[1].c, L[1].g, L[2].c, L[2].g, L[3].c, db.ledgerFix }
+  db.ledger, db.ledgerFix = saved, savedFix
+  ns.Ledger.Calibrate()
+  return unpack(out)
+end""")(ns)
+print("Réparation du bilan :", rep)
+assert rep == (5, 4, 40, 7880, 1, 12343, 1, 1), rep
+
+# Conseil de sac : un objet qui ne se vend presque pas n'est pas conseillé à l'HV
+slow = lua.eval("""function(ns)
+  local A = ns.Analysis
+  local real = A.Get
+  local s = { id = 999002, price = 400, netExp = 380, perDay = 0.1, minNow = 390 }
+  A.Get = function(id) if id == 999002 then return s end return real(id) end
+  AHLedgerDB.items[999002] = { n = "Poison lent", s = 0 }
+  local a = ns.Bags.Advise(999002, 8)
+  AHLedgerDB.items[999002].s = 300
+  local b = ns.Bags.Advise(999002, 8)
+  A.Get = real; AHLedgerDB.items[999002] = nil
+  return a.action, b.action
+end""")(ns)
+print("Objet qui se vend peu :", slow)
+assert slow == ("Garder", "PNJ"), slow
+
+# Artisanat : classé par or/jour possible (bénéfice × part du marché)
+crafts = [e for e in ns.Analysis.Crafts().values() if e.profit is not None]
+for e in crafts:
+    assert e.daily is not None and e.vol is not None
+    if e.sellTo == "HV":
+        assert abs(e.vol - (e.perDay or 0) * 0.25) < 1e-6
+
+# Mes enchères en cours (API moderne simulée) : sous-cotée, vendue
+mine = lua.eval("""function(ns)
+  local mage = ns.Analysis.Get(4338)
+  local OWNED = {
+    { itemKey = { itemID = 4338 }, quantity = 20, buyoutAmount = math.floor((mage.minNow or mage.price) * 1.5), timeLeftSeconds = 40000, status = 0 },
+    { itemKey = { itemID = 4338 }, quantity = 20, buyoutAmount = math.floor((mage.minNow or mage.price) * 1.5), timeLeftSeconds = 30000, status = 0 },
+    { itemKey = { itemID = 4306 }, quantity = 10, buyoutAmount = 5000, status = 1 },
+  }
+  C_AuctionHouse = { GetNumOwnedAuctions = function() return #OWNED end, GetOwnedAuctionInfo = function(i) return OWNED[i] end }
+  fire("OWNED_AUCTIONS_UPDATED")
+  C_AuctionHouse = nil
+  local groups = ns.Auctions.Summary()
+  local by = {}
+  for _, gr in ipairs(groups) do by[gr.id] = gr end
+  return #groups, by[4338].qty, by[4338].auctions, by[4338].status, by[4338].left, by[4306].status, by[4306].unit
+end""")(ns)
+print("Mes enchères :", mine)
+assert mine[:3] == (2, 40, 2) and mine[3] in ("sous-coté", "trop cher") and mine[4:] == (30000, "vendu", 500), mine
+
 # Rapport pour Claude : /ahl claude ouvre la fenêtre de copie et enregistre le rapport
 lua.execute("SlashCmdList.AHLEDGER('claude')")
 report = strip(lua.eval("AHLedgerDB.brief.text"))
 print("\n" + report + "\n")
-for section in ("## Marché", "## Flips HV", "## Artisanat", "## Mes objets", "## Bilan réel", "Métiers : Dépeçage 253/300"):
+for section in ("## Marché", "## Flips HV", "## Artisanat", "## Mes objets", "## Mes enchères en cours", "à récupérer au courrier",
+                "## Bilan réel", "Métiers : Dépeçage 253/300"):
     assert section in report, section
 assert "|c" not in report and len(report) < 20000
 
@@ -473,3 +542,86 @@ assert show[0] == "daylight" and show[1] == show[7] and show[2] == 0, show
 assert show[3] == "jeu" and show[4] == 1 and show[5] == "achat" and show[6] == show[7], show
 
 print("\nOK : tous les tests passent.")
+
+# Achat PNJ → HV : prix fractionnaire gardé, ancien relevé arrondi à 0c ignoré puis remplacé,
+# revente à ×N le prix PNJ « à tester », confirmée par tes propres ventes
+vf = lua.eval("""function(ns)
+  local db = ns.realmDB()
+  local s = ns.Analysis.Get(2589)
+  db.vendor[2589] = { p = 0, npc = "Vieux", zone = "?" }
+  local before = ns.Analysis.VendorFlip(2589, s, db.vendor[2589], {})
+  MERCHANT = { { "Linen Cloth", 10, 200, -1, 2589 } }
+  fire("MERCHANT_SHOW")
+  local p = db.vendor[2589].p
+  local e = ns.Analysis.VendorFlip(2589, s, db.vendor[2589], {})
+  local ok = ns.Analysis.VendorFlip(2589, s, db.vendor[2589], { [2589] = { sold = 30, expired = 2, bought = 0, avgSale = 90 } })
+  db.vendor[2589] = nil
+  return before, p, e.reliable, e.why, e.testQty, ns.money(0.05), ok.reliable, ok.realSold
+end""")(ns)
+print("PNJ → HV lin :", vf)
+assert vf[0] is None and abs(vf[1] - 0.05) < 1e-9, vf
+assert vf[2] is False and "prix PNJ" in vf[3] and 1 <= vf[4] <= 20, vf
+assert strip(vf[5]) == "0.05c" and vf[6] is True and vf[7] == 30, vf
+
+# Tooltip complet : ton stock, ton conseil et tes ventes réelles apparaissent
+lua.execute("""
+advance(10)
+TT = {}
+GameTooltip.GetItem = function() return 'Mageweave', '|Hitem:4338::::|h' end
+GameTooltip.scripts.OnTooltipSetItem(GameTooltip)
+""")
+tt = [strip(re.sub(r"\|T[^|]*\|t", "", x)) for x in lua.eval("TT").values()]
+print("\n".join(tt))
+assert any(x.startswith("Tu en as 30 (sacs 30, banque 0) : Vendre HV") for x in tt), tt
+assert any(x.startswith("Toi, 30 j = 120 vendus") for x in tt), tt
+assert any(x.startswith("Données : ") for x in tt), tt
+print("OK : tests PNJ → HV et tooltip")
+assert any(x.startswith("Vendre à l'HV") or x.startswith("HV ≈ PNJ") or x.startswith("Au PNJ") for x in tt[:4]), tt
+
+# HV ou PNJ : seuils ±10 %, et pastilles sur les cases de Daylight UI tant que l'HV est ouverte
+cmp = lua.eval("""function(ns)
+  local A = ns.Analysis
+  local s = { id = 999001, netExp = 0 }
+  local real = A.Get
+  A.Get = function(id) if id == 999001 then return s end return real(id) end
+  AHLedgerDB.items[999001] = { n = "Test", s = 100 }
+  local out = {}
+  for _, net in ipairs({ 150, 105, 95, 80 }) do s.netExp = net; out[#out + 1] = ns.Bags.Compare(999001).kind end
+  AHLedgerDB.items[999001].s = 0; s.netExp = 50
+  out[#out + 1] = ns.Bags.Compare(999001).kind
+  local noPnj = ns.Bags.CompareText(ns.Bags.Compare(999001))
+  -- pastille : Daylight UI simulé
+  AHLedgerDB.items[999001].s = 100; s.netExp = 150
+  local painter
+  local holder = { CreateTexture = function()
+    local t = mock(); t.shown = false
+    t.Show = function(self) self.shown = true end; t.Hide = function(self) self.shown = false end
+    t.SetColorTexture = function(self, r, g, b) self.rgb = { r, g, b } end
+    return t end }
+  DaylightUI = { API = { major = 1, Skin = function() end, Text = function() return mock() end, Button = function() return mock() end,
+    Close = function() end, Colors = function() return {} end, Attach = function() return holder end,
+    For = function() return { Paint = function(kind, fn) painter = { kind, fn } end } end } }
+  ns.Look.me = nil
+  ns.BagMarks.started = nil
+  local started = ns.BagMarks.Start()
+  local slot = {}
+  local info = { bag = 0, slot = 1, itemID = 999001 }
+  ns.ahOpen = false
+  painter[2](slot, {}, info)
+  local closed = ns.BagMarks.slots[slot] and ns.BagMarks.slots[slot].dot.shown or false
+  ns.ahOpen = true
+  ns.BagMarks.Refresh()
+  local m = ns.BagMarks.slots[slot]
+  local openShown, g = m.dot.shown, m.dot.rgb[2]
+  s.netExp = 50; ns.BagMarks.Refresh()
+  local red = m.dot.rgb[1] == 1 and m.dot.rgb[2] < 0.5
+  ns.ahOpen = false; ns.BagMarks.Refresh()
+  local hidden = not m.dot.shown
+  DaylightUI = nil; ns.Look.me = nil; A.Get = real; AHLedgerDB.items[999001] = nil
+  return out[1], out[2], out[3], out[4], out[5], noPnj, started, painter[1], closed, openShown, g, red, hidden
+end""")(ns)
+print("HV/PNJ :", cmp)
+assert cmp[:5] == ("ah", "same", "same", "vendor", "ah"), cmp
+assert cmp[6] is True and cmp[7] == "bagslot", cmp
+assert cmp[8] is False and cmp[9] is True and cmp[10] == 1 and cmp[11] is True and cmp[12] is True, cmp
+print("OK : HV ou PNJ, pastilles des sacs")

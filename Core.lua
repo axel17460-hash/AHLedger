@@ -161,6 +161,8 @@ end
 -- 123456 -> "12|cffffd700g|r 34|cffc7c7cfs|r 56|cffeda55fc|r"
 function ns.money(c)
   if not c then return "-" end
+  -- moins d'un cuivre (prix à l'unité de flèches, balles…) : on garde les décimales
+  if c ~= 0 and math.abs(c) < 0.5 then return ("%.2f|cffeda55fc|r"):format(c) end
   c = math.floor(c + 0.5)
   local neg = c < 0
   if neg then c = -c end

@@ -1,4 +1,4 @@
-# AHLedger (v0.8)
+# AHLedger (v0.8.1)
 
 Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l'hôtel des ventes et suit les hausses et baisses de prix, pour savoir quoi farmer avant tout le monde. L'analyse se fait entièrement en jeu.
 
@@ -11,12 +11,13 @@ Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l
 - `/ahl` ouvre la fenêtre d'analyse :
   - **Marché** : classement par score « à farmer », avec prix, tendance/jour, vendus/jour, stock, or/jour et signaux. Filtres par catégorie et option pour n'afficher que les marchés liquides. Clique sur un en-tête pour trier.
   - **Flip HV** : enchères affichées sous le prix réel de vente. Pour chaque objet : jusqu'à quel prix unitaire acheter, combien (au plus 2 jours de ventes), à quel prix revendre (juste sous la prochaine enchère restante, sans dépasser le prix réel de vente) et le bénéfice attendu, net de la commission et des dépôts perdus sur les invendus. Seuils : ROI ≥ 15 % et bénéfice ≥ 20 pa. Clic = rechercher l'objet.
-  - **Artisanat** : tes recettes, relevées quand tu ouvres une fenêtre de métier (ouvre chacun de tes métiers une fois). Coût des composants au moins cher entre PNJ (marchands déjà visités) et HV, valeur à l'HV ou au PNJ, bénéfice, et couleur de la recette (orange/jaune = gain de compétence).
+  - **Artisanat** : tes recettes, relevées quand tu ouvres une fenêtre de métier (ouvre chacun de tes métiers une fois). Coût des composants au moins cher entre PNJ (marchands déjà visités) et HV, valeur à l'HV ou au PNJ, bénéfice, or/jour possible, et couleur de la recette (orange/jaune = gain de compétence). Le classement suit l'or/jour : bénéfice × ta part des ventes du marché (25 %), ou 20 fabrications par jour revendues au PNJ. Une recette rentable que personne n'achète tombe donc en bas.
   - **Mes objets** : chaque objet de tes sacs et de ta banque (relue à chaque visite), avec un conseil :
     - **Vendre HV** : au prix indiqué, juste sous l'enchère la moins chère, et en quantité limitée à environ une journée de ventes pour ne pas inonder le marché.
     - **Garder** : le prix monte d'au moins 3 %/jour et le marché n'est pas saturé.
     - **PNJ** : le marchand paie plus que l'HV, net des frais.
     - **Attendre** : quelqu'un brade sous 85 % du prix habituel.
+    - Un objet qui se vend moins d'une fois tous les 2 jours n'est jamais conseillé à l'HV, car chaque expiration coûte le dépôt. Il va au PNJ si le marchand paie au moins la moitié du net HV, sinon il est à garder (ou à tester en 1 seul exemplaire).
   - **Bilan** : tes ventes, achats et expirations des 30 derniers jours, lus dans tes courriers d'HV (il suffit d'ouvrir la boîte aux lettres). Pour chaque objet : solde, prix moyen obtenu et écart avec le prix prévu par l'addon. Dès 5 ventes, la commission et le dépôt réels de Forever sont mesurés sur tes factures et remplacent les valeurs supposées dans tous les calculs. `/ahl bilan` résume le tout dans le chat.
   - **Achat PNJ** : objets achetés chez des marchands que tu as déjà ouverts et revendables à profit (commission déduite).
   - **Farm** : tes sessions `/ahl farm start` / `/ahl farm stop`, regroupées par zone et valorisées en or/h aux prix actuels.
@@ -24,6 +25,7 @@ Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l
 - Pendant que tu navigues normalement à l'HV, une alerte apparaît dans le chat dès qu'une page affichée contient une affaire à revendre au PNJ.
 - Le prix de rachat PNJ vient du client lui-même : c'est le 11e retour de `GetItemInfo` (sellPrice), la même source qu'Auctionator. Si un objet n'est pas encore dans le cache du client, l'addon le complète à la réception de `GET_ITEM_INFO_RECEIVED`. Les prix d'achat chez les PNJ, eux, ne sont relevés que quand tu ouvres un marchand.
 - Les tooltips d'objets affichent le prix, la tendance, les ventes par jour et les signaux.
+- **HV ou PNJ ?** En tête du tooltip, et en pastille sur les cases des sacs et de la banque de Daylight UI tant que l'HV est ouverte : vert = l'HV rapporte plus de 10 % de plus que le marchand (net de commission et de dépôts, d'après le dernier scan), jaune = à ±10 % près (le PNJ est plus simple), rouge = au PNJ. Rien sur les objets liés ni sans marché HV observé. Colonne « HV/PNJ » dans l'onglet Mes objets. Seuil : `ns.Bags.SAME_BAND`.
 - **Clic sur une ligne, HV ouverte** : l'objet s'affiche à l'achat. Avec Daylight UI, c'est son onglet Acheter (AHLedger remplit la case de recherche du jeu, que Daylight UI surveille comme pour un Maj-clic sur un objet des sacs) ; sinon la recherche d'Auctionator, sinon l'onglet Acheter du jeu. Maj-clic met le lien dans le chat. AHLedger n'achète rien lui-même : tu choisis l'enchère et tu confirmes dans l'écran d'achat (règles Blizzard, et pas d'achat par erreur depuis une liste d'analyse).
 
 ## Daylight UI
@@ -34,7 +36,8 @@ Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l
 - Un scan complet lancé depuis l'HV de Daylight UI est lu par AHLedger, comme ceux d'Auctionator.
 
 ## Conseils de Claude
-Un addon ne peut pas communiquer avec l'extérieur. AHLedger prépare donc un rapport texte de tout ce qu'il sait : marché, tendances, flips, artisanat, sacs, bilan réel, métiers et zones de farm.
+Un addon ne peut pas communiquer avec l'extérieur. AHLedger prépare donc un rapport texte de tout ce qu'il sait : marché, tendances, flips, artisanat, sacs, enchères en cours, bilan réel, métiers et zones de farm.
+- **Mes enchères en cours** : ta liste d'enchères est relue chaque fois que le jeu l'envoie (ouverture de l'HV, mise en vente, vente, annulation ; si aucun addon ne l'a demandée 4 s après l'ouverture de l'HV, AHLedger la demande une fois, comme la fenêtre du jeu). Le rapport donne pour chaque lot ton prix, le temps restant, le moins cher et le prix réel du dernier scan, le verdict (sous-coté, trop cher, ok) et le temps estimé pour tout vendre à 25 % du marché, ainsi que l'or des ventes à récupérer au courrier.
 - **En jeu** : `/ahl claude`, ou le bouton **Rapport Claude** de la fenêtre. Le texte est déjà sélectionné : Ctrl+C, puis colle-le dans une conversation avec Claude.
 - **Hors jeu** : le rapport est enregistré dans les SavedVariables après chaque scan et à la déconnexion. `python tools/ahledger.py brief ".../SavedVariables/AHLedger.lua" --out rapport.md` le ressort dans un fichier.
 
@@ -65,7 +68,7 @@ Un addon ne peut pas communiquer avec l'extérieur. AHLedger prépare donc un ra
 - **Score « à farmer »** : or/jour × (1 + 3 × tendance, borné entre 0,5 et 1,5) × signaux (pénurie ×1,2, demande ×1,1, afflux ×0,8, stock lourd ×0,75, dominé ×0,85). Le tout est pondéré par la confiance dans le volume, v / (v + 3) où v = unités vues vendues : une seule vente observée ne place plus un objet en tête.
 
 ## Métiers
-- **Montée de niveau** : dans l'onglet Artisanat, le bouton **Vue : montée de niveau** classe tes recettes par coût d'un point de compétence : (composants − revente) ÷ chance de gain. Un coût négatif veut dire que tu montes en gagnant de l'or.
+- **Montée de niveau** : dans l'onglet Artisanat, le bouton **Vue : montée de niveau** classe tes recettes par coût d'un point de compétence : (composants − revente) ÷ chance de gain. Un coût négatif veut dire que tu montes en gagnant de l'or, à condition de tout revendre. Le plan ne compte à l'HV que ta part (25 %) de 2 jours de ventes de chaque objet fabriqué ; le reste est valorisé au prix PNJ. Un bénéfice ne compte qu'une fois par point de compétence, pour ne pas préférer une recette presque grise qui demande des dizaines de fabrications. Le plan affiche aussi l'or **à avancer** (composants et recettes à acheter avant de revendre).
 - `/ahl monter cuir 225` donne le plan complet : quelles recettes fabriquer, combien de fois, les composants à réunir et le coût net. Sans addon de recettes (OneForAll absent), seule la couleur actuelle de tes recettes est connue : le plan s'arrête après quelques points et le signale.
 - **OneForAll** (addon compagnon de Forever) est lu s'il est installé : toutes les recettes du client Forever avec leurs seuils jaune/vert/gris, le niveau pour les apprendre et leur source (maître et son prix, marchand de ta faction et son prix, butin, quête). Une recette de butin ou payée en faveur marchande prend le prix de son objet-recette à l'HV s'il y est vu. Le plan `/ahl monter` va alors jusqu'au bout et propose les recettes à acheter. L'adaptateur (`RecipesOneForAll.lua`) lit sa table globale `OneForAll` au moment du calcul, sans rien recopier. `/ahl diag` indique combien de recettes il a lues.
 - **Brancher un autre addon de recettes** : `ns.RecipeDB.Register(nom, { Recipes = function(métier) … end })` dans `RecipeDB.lua`. Le format attendu (seuils jaune/vert/gris, source et prix de la recette) est décrit en tête du fichier. Le planificateur et l'onglet Montée s'en servent aussitôt.
@@ -97,7 +100,8 @@ python tools/ahledger.py brief ".../SavedVariables/AHLedger.lua" --out rapport.m
 - Les noms d'objets manquants (pas encore dans le cache du client) sont redemandés au serveur à chaque connexion, 100 par seconde.
 - Sans Auctionator, AHLedger fait son propre scan via `C_AuctionHouse.ReplicateItems`.
 - L'alerte en direct pendant la navigation ne marche qu'avec l'API Classic ; sur Forever, la détection passe par les scans complets. Cliquer sur une ligne de l'onglet Revente PNJ lance la recherche via l'API publique d'Auctionator (`MultiSearch`).
-- Reste à vérifier : le taux de la commission HV (`Analysis.AH_CUT`).
+- Commission HV de Forever : 5 % (mesurée sur les factures des ventes d'équipement, 23/11/2026).
+- Factures d'HV (`GetInboxInvoiceInfo`) : la quantité est le 11e retour ; pour une pile vendue, le champ « rachat » contient la quantité, pas le prix. Le prix est lu dans le champ « enchère », et recalculé depuis l'or du courrier s'il paraît faux. Les lignes relevées par la 0.8.0 (quantité 0, doublons quand on récupère l'or) sont réparées au chargement.
 
 ## Règles Blizzard (résumé, sans valeur juridique)
 - L'addon reste gratuit, avec un code lisible, et ne fait aucune publicité ni appel aux dons.

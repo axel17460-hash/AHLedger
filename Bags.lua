@@ -10,6 +10,7 @@ ns.Bags = Bags
 Bags.HOLD_TREND = 0.03     -- prix en hausse de 3 %/j ou plus : on garde
 Bags.UNDERCUT_FLOOR = 0.85 -- enchère la moins chère à moins de 85 % du prix réel : marché bradé, on attend
 Bags.MIN_VALUE = 100       -- on ignore les objets qui valent moins de 1 pa en tout
+Bags.SLOW_PER_DAY = 0.5    -- moins d'une vente tous les 2 jours : l'HV risque de ne rien vendre
 
 local C = C_Container
 local function numSlots(bag)
@@ -90,6 +91,15 @@ function Bags.Advise(id, n)
   elseif s.minNow and s.price and s.minNow < s.price * Bags.UNDERCUT_FLOOR then
     e.action, e.unit = "Attendre", s.netExp
     e.why = ("HV bradé : %s/u contre %s d'habitude"):format(ns.money(s.minNow), ns.money(s.price))
+  elseif s.perDay and s.perDay < Bags.SLOW_PER_DAY then
+    -- presque personne n'achète : chaque mise en vente qui expire coûte son dépôt
+    local slow = ("se vend peu à l'HV (~%.1f/j)"):format(s.perDay)
+    if vsell > 0 and vsell >= s.netExp * 0.5 then
+      e.action, e.unit, e.why = "PNJ", vsell, slow .. " : le marchand paie tout de suite"
+    else
+      e.action, e.unit = "Garder", s.netExp
+      e.why = slow .. " : utilise-le, ou mets-en 1 seul en vente pour tester"
+    end
   else
     -- juste sous l'enchère la moins chère, sans dépasser le prix réel de vente de plus de 20 %
     local post = math.floor(s.minNow and (s.minNow - 1) or s.price)
@@ -106,6 +116,46 @@ function Bags.Advise(id, n)
   local rel = ns.Prof.Related()[id]
   if rel == "composant" then e.why = e.why .. " · composant d'une de tes recettes" end
   return e
+end
+
+-- HV ou PNJ ? Compare le net attendu à l'HV (commission et dépôts perdus déduits, d'après le
+-- dernier scan) au rachat par le marchand. Écart dans ±SAME_BAND : à peu près pareil, et le PNJ
+-- est alors plus simple (paiement immédiat, rien à surveiller).
+Bags.SAME_BAND = 0.10
+
+-- { kind = "ah" | "same" | "vendor", ah = net HV /u, vendor = PNJ /u, gain = HV/PNJ − 1 (nil sans PNJ),
+--   slow = se vend peu, unsure = aucune vente vue au prix } ; nil sans marché HV observé
+function Bags.Compare(id)
+  local s = ns.Analysis.Get(id)
+  if not s then return nil end
+  local meta = AHLedgerDB.items[id]
+  local vsell = meta and meta.s or 0
+  local ah = math.max(s.netExp or 0, 0)
+  local r = { ah = ah, vendor = vsell, s = s,
+              slow = s.perDay ~= nil and s.perDay < Bags.SLOW_PER_DAY, unsure = s.realPrice == nil }
+  if vsell <= 0 then
+    r.kind = ah > 0 and "ah" or "vendor"
+  else
+    r.gain = ah / vsell - 1
+    r.kind = (r.gain > Bags.SAME_BAND and "ah") or (r.gain < -Bags.SAME_BAND and "vendor") or "same"
+  end
+  return r
+end
+
+-- Phrase courte et colorée pour le tooltip
+Bags.COLORS = { ah = { 0.25, 1, 0.25 }, same = { 1, 0.82, 0 }, vendor = { 1, 0.31, 0.31 } }
+function Bags.CompareText(c)
+  local pct = c.gain and (" (HV %+.0f %%)"):format(c.gain * 100) or ""
+  local prices = c.vendor > 0 and ("HV %s net · PNJ %s"):format(ns.money(c.ah), ns.money(c.vendor))
+    or ("HV %s net · le PNJ ne le rachète pas"):format(ns.money(c.ah))
+  local head
+  if c.kind == "ah" then head = "Vendre à l'HV" .. pct
+  elseif c.kind == "same" then head = "HV ≈ PNJ" .. pct .. " : PNJ plus simple"
+  else head = "Au PNJ, pas la peine à l'HV" .. pct end
+  local warn = {}
+  if c.slow then warn[#warn + 1] = ("se vend peu (~%.1f/j)"):format(c.s.perDay) end
+  if c.unsure then warn[#warn + 1] = "prix affiché, aucune vente vue" end
+  return head, prices .. (#warn > 0 and (" · " .. table.concat(warn, ", ")) or "")
 end
 
 function Bags.Advice()
