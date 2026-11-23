@@ -30,7 +30,10 @@ function Options.Set(key, value)
     AHLedgerDB.opt[key] = value
   end
   ns.dataVersion = (ns.dataVersion or 0) + 1 -- vide le cache des infobulles
-  if key == "bagMarks" and ns.BagMarks then ns.safe("pastilles", ns.BagMarks.Refresh, true) end
+  if key == "bagMarks" and ns.BagMarks then
+    ns.safe("pastilles", ns.BagMarks.Refresh, true)
+    ns.safe("pastilles", ns.BagMarks.SyncTools)
+  end
   if key == "minimap" and ns.MinimapButton then ns.safe("bouton minicarte", ns.MinimapButton.Sync) end
   for _, p in ipairs(panels) do p.Sync() end
 end

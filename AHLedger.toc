@@ -4,7 +4,7 @@
 ## Author: Axel
 ## Version: 0.8.1
 ## SavedVariables: AHLedgerDB
-## OptionalDeps: Auctionator, DaylightUI, DaylightUI_AuctionHouse, OneForAll
+## OptionalDeps: Auctionator, DaylightUI, DaylightUI_AuctionHouse, DaylightUI_Bags, OneForAll
 
 # 16001 = WoW Forever 1.60 (même valeur qu'Auctionator)
 
