@@ -1,5 +1,6 @@
--- AHLedger - Pastilles HV / PNJ sur les cases des sacs et de la banque de Daylight UI, tant que
--- l'hôtel des ventes est ouvert : vert = mieux à l'HV, jaune = à peu près pareil, rouge = au PNJ.
+-- AHLedger - Pastilles HV / PNJ sur les cases des sacs et de la banque de Daylight UI :
+-- vert = mieux à l'HV, jaune = à peu près pareil, rouge = au PNJ. Toujours affichées, ou seulement
+-- HV ouverte, ou jamais, selon l'option « bagMarks » (/ahl options).
 --
 -- Passe par l'API publique de Daylight UI : me.Paint("bagslot", …) et API.Attach (voir son API.md).
 -- La pastille est dessinée sur le cadre que donne API.Attach, jamais sur les pièces de Daylight UI.
@@ -38,7 +39,9 @@ end
 
 -- Type de pastille pour un objet, ou nil
 function Marks.KindFor(itemID, bag, slot)
-  if not (itemID and ns.ahOpen and Marks.on and ns.Options.Get("bagMarks")) then return nil end
+  if not (itemID and Marks.on) then return nil end
+  local mode = ns.Options.Get("bagMarks")
+  if mode == "off" or (mode == "ah" and not ns.ahOpen) then return nil end
   if bound(bag, slot) then return nil end
   local c = ns.Bags.Compare(itemID)
   return c and c.kind

@@ -640,6 +640,8 @@ cmp = lua.eval("""function(ns)
   local started = ns.BagMarks.Start()
   local slot = {}
   local info = { bag = 0, slot = 1, itemID = 999001 }
+  AHLedgerDB.opt = AHLedgerDB.opt or {}
+  AHLedgerDB.opt.bagMarks = "ah"
   ns.ahOpen = false
   painter[2](slot, {}, info)
   local closed = ns.BagMarks.slots[slot] and ns.BagMarks.slots[slot].dot.shown or false
@@ -651,6 +653,8 @@ cmp = lua.eval("""function(ns)
   local red = m.dot.rgb[1] == 1 and m.dot.rgb[2] < 0.5
   ns.ahOpen = false; ns.BagMarks.Refresh()
   local hidden = not m.dot.shown
+  AHLedgerDB.opt.bagMarks = nil; ns.BagMarks.Refresh()           -- par défaut : toujours, même HV fermée
+  hidden = hidden and m.dot.shown
   DaylightUI = nil; ns.Look.me = nil; A.Get = real; AHLedgerDB.items[999001] = nil
   return out[1], out[2], out[3], out[4], out[5], noPnj, started, painter[1], closed, openShown, g, red, hidden
 end""")(ns)
@@ -792,11 +796,14 @@ modes = lua.eval("""function(ns)
   ns.ahOpen = false
   ns.Options.Set("ttAway", "off")
   local off = tip()
-  ns.Options.Set("bagMarks", false)
+  ns.Options.Set("bagMarks", "off")
   ns.ahOpen = true
   local mark = ns.BagMarks.KindFor(4338)
   AHLedgerDB.opt = nil
-  local markBack = ns.BagMarks.KindFor(4338)
+  ns.ahOpen = false
+  local markBack = ns.BagMarks.KindFor(4338)             -- par défaut : affichée même HV fermée
+  AHLedgerDB.opt = { bagMarks = false }                 -- ancienne case décochée = jamais
+  markBack = markBack and ns.BagMarks.KindFor(4338) == nil and markBack
   ns.Options.Show()
   return compact, shift, atAH, ahCompact, off, mark, markBack, ns.Options.window ~= nil
 end""")(ns)

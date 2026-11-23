@@ -521,7 +521,7 @@ end
 
 -- Rafraîchit l'affichage après un scan
 function UI.OnData()
-  if ns.BagMarks and ns.ahOpen then ns.BagMarks.Refresh() end
+  if ns.BagMarks then ns.BagMarks.Refresh() end
   if UI.content and UI.content:IsVisible() then UI.Refresh() end
 end
 

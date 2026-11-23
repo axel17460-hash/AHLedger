@@ -5,7 +5,7 @@ local Options = {}
 ns.Options = Options
 
 -- ttAway : infobulle hors de l'HV ; ttAH : infobulle à l'HV ; ttShift : Maj affiche le détail complet
-local DEFAULTS = { ttAway = "compact", ttAH = "full", ttShift = true, bagMarks = true }
+local DEFAULTS = { ttAway = "compact", ttAH = "full", ttShift = true, bagMarks = "always" }
 
 function Options.Get(key)
   local o = AHLedgerDB and AHLedgerDB.opt
@@ -14,6 +14,8 @@ function Options.Get(key)
     if key == "keepRaw" then return not (AHLedgerDB and AHLedgerDB.keepRaw == false) end
     return DEFAULTS[key]
   end
+  -- ancienne case à cocher des pastilles : coché = toujours, décoché = jamais
+  if key == "bagMarks" and type(v) == "boolean" then return v and "always" or "off" end
   return v
 end
 
@@ -85,9 +87,14 @@ local function build(parent, top)
   check("Maj (Shift) enfoncée : infobulle complète", function() return Options.Get("ttShift") end,
     function(v) Options.Set("ttShift", v) end)
   y = y - 6
+  title("Pastilles HV / PNJ sur les sacs et la banque")
+  radio("bagMarks", {
+    { "always", "Toujours" },
+    { "ah", "Seulement à l'hôtel des ventes" },
+    { "off", "Jamais" },
+  })
+  y = y - 6
   title("Divers")
-  check("Pastilles HV / PNJ sur les sacs (HV ouverte)", function() return Options.Get("bagMarks") end,
-    function(v) Options.Set("bagMarks", v) end)
   check("Garder les scans bruts pour l'export Python", function() return Options.Get("keepRaw") end,
     function(v) Options.Set("keepRaw", v) end)
 
