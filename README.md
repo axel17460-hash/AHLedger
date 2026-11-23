@@ -1,4 +1,4 @@
-# AHLedger (v0.7)
+# AHLedger (v0.8)
 
 Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l'hôtel des ventes et suit les hausses et baisses de prix, pour savoir quoi farmer avant tout le monde. L'analyse se fait entièrement en jeu.
 
@@ -57,12 +57,15 @@ Un addon ne peut pas communiquer avec l'extérieur. AHLedger prépare donc un ra
 - **Score « à farmer »** : or/jour × (1 + 3 × tendance, borné entre 0,5 et 1,5) × signaux (pénurie ×1,2, demande ×1,1, afflux ×0,8, stock lourd ×0,75, dominé ×0,85).
 
 ## Métiers
+- **Montée de niveau** : dans l'onglet Artisanat, le bouton **Vue : montée de niveau** classe tes recettes par coût d'un point de compétence : (composants − revente) ÷ chance de gain. Un coût négatif veut dire que tu montes en gagnant de l'or.
+- `/ahl monter cuir 225` donne le plan complet : quelles recettes fabriquer, combien de fois, les composants à réunir et le coût net. Tant qu'aucun addon de recettes n'est branché, seule la couleur actuelle de tes recettes est connue : le plan s'arrête après quelques points et le signale.
+- **Brancher un addon de recettes** : `ns.RecipeDB.Register(nom, { Recipes = function(métier) … end })` dans `RecipeDB.lua`. Le format attendu (seuils jaune/vert/gris, source et prix de la recette) est décrit en tête du fichier. Le planificateur et l'onglet Montée s'en servent aussitôt.
 - `/ahl metiers` affiche tes niveaux, le niveau maximal des monstres que tu peux dépecer, et les métiers dont les recettes ne sont pas encore relevées.
 - La catégorie **Mes métiers** de l'onglet Marché ne montre que ce qui te concerne : ce que tu peux dépecer, ce que tu fabriques et leurs composants.
 - Les seuils de dépeçage des cuirs et écailles (`Professions.lua`) sont approximatifs.
 
 ## Commandes
-`/ahl` · `/ahl scan` · `/ahl status` · `/ahl metiers` · `/ahl bilan` · `/ahl claude` · `/ahl farm start|stop` · `/ahl raw on|off` (snapshots bruts pour l'export Python) · `/ahl prune <n>`
+`/ahl` · `/ahl scan` · `/ahl status` · `/ahl metiers` · `/ahl bilan` · `/ahl claude` · `/ahl diag` · `/ahl monter <métier> [niveau]` · `/ahl farm start|stop` · `/ahl raw on|off` (snapshots bruts pour l'export Python) · `/ahl prune <n>`
 
 ## Export Python (optionnel)
 ```
@@ -71,8 +74,11 @@ python tools/ahledger.py report --days 7
 python tools/ahledger.py brief ".../SavedVariables/AHLedger.lua" --out rapport.md
 ```
 
+## Diagnostic
+`/ahl diag` vérifie, module par module, quelles fonctions du jeu sont présentes sur ton client et quelle variante (Classic ou Retail) l'addon utilise. Il affiche aussi les événements que le client refuse, les erreurs survenues depuis la connexion et ce qui a déjà été collecté. Le diagnostic est aussi ajouté au rapport pour Claude.
+
 ## Tests hors jeu
-`pip install lupa` puis `python tests/run_test.py`. Le test simule 14 jours de marché, 6 scans par soir, et vérifie que la hausse, la baisse, la pénurie et l'afflux sont bien détectés.
+`pip install lupa luaparser`, puis `python tests/check_globals.py` (variables globales : fautes de frappe, `local` oublié) et `python tests/run_test.py`. GitHub les lance à chaque push (`.github/workflows/tests.yml`), avec en plus `luacheck`, pour l'instant à titre indicatif. Le test simule 14 jours de marché, 6 scans par soir, et vérifie que la hausse, la baisse, la pénurie et l'afflux sont bien détectés.
 
 ## Notes Forever (vérifiées en jeu le 22/11/2026)
 - Forever n'a **pas** l'API d'HV Classic (`QueryAuctionItems` absent) : il utilise l'API Retail `C_AuctionHouse` (scan complet par `ReplicateItems`).

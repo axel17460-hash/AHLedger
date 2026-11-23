@@ -76,8 +76,34 @@ assert rel[4304] == "dépeçage" and rel[15417] is None, "dépeçage 253 : cuir 
 assert rel[929] == "artisanat" and rel[4306] == "composant"
 assert ns.Prof.MaxSkinLevel(253) == 50
 
+# Planificateur : sans base de recettes, plan partiel (couleur actuelle seulement)
+partial = ns.Plan.Level("firstaid", 220, 225)
+assert partial.partial and partial.reached == 225
+# Base de recettes externe (adaptateur factice) : seuils et recette à acheter
+lua.eval("""function(ns)
+  ns.RecipeDB.Register("test", { Recipes = function(prof)
+    if prof ~= "firstaid" then return {} end
+    return {
+      { out = 929, prof = prof, r = { [4306] = 2, [3371] = 1 }, levels = { 200, 215, 230, 245 } },
+      { out = 2589, prof = prof, r = { [3371] = 1 }, made = 1, levels = { 210, 225, 240, 255 },
+        source = { kind = "trainer", cost = 5000, where = "Maître" } },
+    }
+  end })
+end""")(ns)
+full = ns.Plan.Level("firstaid", 220, 240)
+print("Plan secourisme 220 → 240 :", [strip(l) for l in ns.Plan.Describe(full).values()])
+assert not full.partial and full.reached == 240 and full.crafts >= 20
+lua.execute("SlashCmdList.AHLEDGER('monter secourisme 230')")
+assert "Montée Secourisme 220 → 230" in strip(list(lua.eval("LOG").values())[-3]) or any(
+    "Montée Secourisme 220 → 230" in strip(m) for m in list(lua.eval("LOG").values())[-6:])
+# Diagnostic
+lua.execute("SlashCmdList.AHLEDGER('diag')")
+diag = [strip(l) for l in lua.eval("AHLedgerDB.diag.lines").values()]
+print("\n".join(diag))
+assert any(l.startswith("OK   Scan HV") for l in diag) and any("Sources de recettes : connues, test" in l for l in diag)
+
 lua.execute("SlashCmdList.AHLEDGER('')")  # ouvre la fenêtre
-for mode in ("market", "flip", "craft", "vendor", "snipe", "farm"):
+for mode in ("market", "flip", "craft", "level", "vendor", "snipe", "farm"):
     show_ui(mode)
 
 # Flip HV : la pile bradée de soie doit ressortir, achetée jusqu'à 5 pa/u

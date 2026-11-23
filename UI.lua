@@ -99,6 +99,30 @@ local MODES = {
     },
     rows = function() return ns.Analysis.Crafts() end,
   },
+  level = {
+    title = "Montée",
+    tab = false, -- vue de l'onglet Artisanat
+    sort = "perPoint",
+    asc = true,
+    help = "Coût d'un point de compétence au niveau actuel : (composants − revente) ÷ chance de gain. Plan complet : /ahl monter cuir 225.",
+    cols = {
+      { "Recette", 165, function(e) return itemLabel(e.id, e.s) end, "name" },
+      { "Métier", 62, function(e) return ns.Prof.LABEL[e.prof] or e.prof end, "prof" },
+      { "Niveau", 55, function(e) return DIFF[e.diff] or "-" end, "diff" },
+      { "Chance", 50, function(e) return ("%.0f%%"):format(e.chance * 100) end, "chance", "RIGHT" },
+      { "Composants", 78, function(e) return e.cost and ns.money(e.cost) or "|cff808080prix ?|r" end, "cost", "RIGHT" },
+      { "Revente", 78, function(e) return ns.money(e.value) end, "value", "RIGHT" },
+      { "Coût / point", 85, function(e) return e.perPoint and ((e.perPoint <= 0 and "|cff40ff40" or "") .. ns.money(e.perPoint) .. (e.perPoint <= 0 and "|r" or "")) or "-" end, "perPoint", "RIGHT" },
+      { "Recette à acheter", 100, function(e) return e.learnCost and ns.money(e.learnCost) or "" end, "learnCost", "RIGHT" },
+    },
+    rows = function()
+      local out = {}
+      for _, prof in ipairs(ns.Plan.CraftProfs()) do
+        for _, e in ipairs(ns.Plan.NextPoints(prof)) do out[#out + 1] = e end
+      end
+      return out
+    end,
+  },
   bags = {
     title = "Mes objets",
     sort = "value",
@@ -266,6 +290,13 @@ function UI.Build()
     UI.Refresh()
   end)
 
+  UI.viewButton = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  UI.viewButton:SetSize(160, 22)
+  UI.viewButton:SetPoint("TOPRIGHT", -14, -54)
+  UI.viewButton:SetScript("OnClick", function()
+    UI.SetMode(UI.mode == "craft" and "level" or "craft")
+  end)
+
   UI.help = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
   UI.help:SetPoint("TOPLEFT", 14, -58)
   UI.help:SetWidth(WIDTH - 28)
@@ -353,7 +384,7 @@ function UI.SetMode(mode)
   UI.mode = mode
   UI.offset = 0
   UI.sortKey = MODES[mode].sort
-  UI.sortDesc = true
+  UI.sortDesc = not MODES[mode].asc
   local cols = MODES[mode].cols
   local x = 14
   for i = 1, MAX_COLS do
@@ -381,7 +412,14 @@ function UI.SetMode(mode)
   end
   local isMarket = mode == "market"
   if isMarket then UI.catButton:Show(); UI.liqButton:Show() else UI.catButton:Hide(); UI.liqButton:Hide() end
-  UI.help:SetWidth(isMarket and (WIDTH - 310) or (WIDTH - 28))
+  local isCraft = mode == "craft" or mode == "level"
+  if isCraft then
+    UI.viewButton:Show()
+    UI.viewButton:SetText(mode == "craft" and "Vue : montée de niveau" or "Vue : rentabilité")
+  else
+    UI.viewButton:Hide()
+  end
+  UI.help:SetWidth((isMarket and (WIDTH - 310)) or (isCraft and (WIDTH - 190)) or (WIDTH - 28))
   UI.Refresh()
 end
 

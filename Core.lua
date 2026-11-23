@@ -27,10 +27,13 @@ function ns.print(msg)
 end
 
 -- Exécute fn en affichant toute erreur dans le chat (le jeu masque les erreurs Lua par défaut)
+ns.errors = {}
 function ns.safe(label, fn, ...)
   local ok, err = pcall(fn, ...)
   if not ok then
     ns.print("|cffff5050Erreur (" .. label .. ") :|r " .. tostring(err))
+    ns.errors[#ns.errors + 1] = label .. " : " .. tostring(err)
+    if #ns.errors > 20 then table.remove(ns.errors, 1) end
   end
   return ok
 end
@@ -39,7 +42,12 @@ end
 function ns.on(event, fn)
   if not ns.listeners[event] then
     ns.listeners[event] = {}
-    frame:RegisterEvent(event)
+    -- un client récent refuse les événements qu'il ne connaît pas : on les note pour /ahl diag
+    local valid = not (C_EventUtils and C_EventUtils.IsEventValid) or C_EventUtils.IsEventValid(event)
+    if not valid or not pcall(frame.RegisterEvent, frame, event) then
+      ns.invalidEvents = ns.invalidEvents or {}
+      ns.invalidEvents[event] = true
+    end
   end
   table.insert(ns.listeners[event], fn)
 end
@@ -208,6 +216,10 @@ local function slash(input)
     else ns.print("/ahl farm start | stop") end
   elseif cmd == "metiers" or cmd == "métiers" or cmd == "prof" then
     ns.Prof.Report()
+  elseif cmd == "monter" or cmd == "montee" or cmd == "montée" then
+    ns.Plan.Command(rest)
+  elseif cmd == "diag" then
+    ns.Diag.Print()
   elseif cmd == "claude" or cmd == "export" or cmd == "rapport" then
     ns.Export.Show()
   elseif cmd == "bilan" then
@@ -218,7 +230,7 @@ local function slash(input)
     while #r.scans > keep do table.remove(r.scans, 1) end
     ns.print(("Scans purgés, %d conservés. Pense à /reload pour écrire le fichier."):format(#r.scans))
   else
-    ns.print("Commandes : /ahl (fenêtre) | scan | status | metiers | bilan | claude (rapport à copier) | farm start | farm stop | prune <n> | raw on|off | debug")
+    ns.print("Commandes : /ahl (fenêtre) | scan | status | metiers | bilan | claude (rapport à copier) | diag | monter <métier> [niveau] | farm start | farm stop | prune <n> | raw on|off | debug")
   end
 end
 SlashCmdList.AHLEDGER = function(input) ns.safe("/ahl " .. (input or ""), slash, input) end

@@ -35,6 +35,7 @@ local function nameOf(id, s)
 end
 
 function Export.Build()
+  if ns.Diag then ns.safe("diag", ns.Diag.Run) end
   local L = {}
   local function add(fmt, ...) L[#L + 1] = select("#", ...) > 0 and fmt:format(...) or fmt end
   local db = ns.realmDB()
@@ -100,6 +101,18 @@ function Export.Build()
       e.diff or "?", g(e.cost), g(math.max(e.value or 0, e.vendorValue)), e.sellTo or "-", g(e.profit), num(e.perDay))
   end
 
+  for _, prof in ipairs(ns.Plan.CraftProfs()) do
+    local rank = ns.Prof.Skill(prof)
+    local maxRank = c.max and c.max[prof]
+    if rank and maxRank and rank < maxRank then
+      local p = ns.Plan.Level(prof, rank, maxRank)
+      add("")
+      add("## Montée %s %d → %d%s : %d fabrications, coût net %s", ns.Prof.LABEL[prof] or prof, p.from, p.reached,
+        p.partial and " (plan partiel, seuils des recettes inconnus)" or "", math.ceil(p.crafts), g(p.total))
+      for _, l in ipairs(ns.Plan.Describe(p)) do add("%s", l) end
+    end
+  end
+
   add("")
   add("## Mes objets (sacs%s)", c.bankTime and (" + banque vue le " .. date("%d/%m", c.bankTime)) or "")
   local bags = sorted(ns.Bags.Advice(), "value", Export.TOP.bags)
@@ -145,6 +158,12 @@ function Export.Build()
   end
 
   add("")
+  local diag = AHLedgerDB.diag
+  if diag then
+    add("## Diagnostic du client (%s)", date("%Y-%m-%d %H:%M", diag.t))
+    for _, l in ipairs(diag.lines) do add("%s", l) end
+    add("")
+  end
   add("Question : d'après ces données, que dois-je faire en priorité pour gagner de l'or (vendre, acheter, fabriquer, farmer) ?")
   return table.concat(L, "\n")
 end
