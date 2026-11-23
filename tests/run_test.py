@@ -230,7 +230,8 @@ fire("BAG_UPDATE_DELAYED"); runTimers()
 adv = {e.id: e for e in ns.Bags.Advice().values()}
 for e in adv.values():
     print("Conseil", strip(lua.eval("function(id) return AHLedgerDB.items[id].n end")(e.id)), e.count, e.action, e.post, e.postQty, strip(e.why))
-assert adv[4306].action == "Garder"
+# la soie vaut plus transformée (recette simulée) : « Fabriquer » l'emporte sur « Garder »
+assert adv[4306].action == ("Fabriquer" if ns.Analysis.CraftUp(4306) else "Garder"), adv[4306].action
 mage = ns.Analysis.Get(4338)
 assert adv[4338].action == "Vendre HV" and adv[4338].post == (mage.minNow - 1 if mage.minNow else int(mage.price)) and adv[4338].postQty == 30
 ns.UI.SetMode("bags"); assert ns.UI.rows[1].shown
@@ -817,3 +818,39 @@ assert "Données : " in atAH and "Données : " not in ahCompact and "HV /u = " i
 assert off == "", off
 assert modes[5] is None and modes[6] is not None and modes[7], modes
 print("OK : options d'infobulle et de pastilles")
+
+# Fabriquer plutôt que vendre brut : un composant qui vaut plus transformé
+up = lua.eval("""function(ns)
+  local A, P = ns.Analysis, ns.Prof
+  local realGet, realRecipes = A.Get, P.Recipes
+  local stats = {
+    [999201] = { id = 999201, netExp = 100, perDay = 20, realPrice = 110, price = 110, minNow = 110, signals = {} },  -- composant : 1 pa brut
+    [999202] = { id = 999202, netExp = 1000, perDay = 8, realPrice = 1050, signals = {} }, -- objet fabriqué : 10 pa
+    [999203] = { id = 999203, netExp = 30, minNow = 30, perDay = 50, signals = {} },       -- autre composant : 30c
+  }
+  A.Get = function(id) return stats[id] or realGet(id) end
+  P.Recipes = function() return { test = { [999202] = { n = "Bracelet", r = { [999201] = 3, [999203] = 2 } } } } end
+  AHLedgerDB.items[999201] = { n = "Cuir", s = 20 }
+  AHLedgerDB.items[999202] = { n = "Bracelet", s = 200 }
+  local best = A.CraftUp(999201)
+  local adv = ns.Bags.Advise(999201, 9)
+  advance(10)
+  TT = {}
+  GameTooltip.GetItem = function() return 'x', '|Hitem:999201::::|h' end
+  GameTooltip.scripts.OnTooltipSetItem(GameTooltip)
+  local tip = table.concat(TT, "\\n")
+  -- objet fabriqué qui ne vaut presque rien : pas d'alerte
+  stats[999202].netExp = 300
+  local none, weak = A.CraftUp(999201)
+  A.Get, P.Recipes = realGet, realRecipes
+  AHLedgerDB.items[999201], AHLedgerDB.items[999202] = nil, nil
+  return best.perUnit, best.raw, best.out, adv.action, tip, none, weak and weak.gain
+end""")(ns)
+perUnit, raw, out, action, tip, none, weakGain = up
+tip = strip(re.sub(r"\|T[^|]*\|t", "", tip))
+print("Fabriquer plutôt :", perUnit, raw, action, [l for l in tip.split("\n") if "plutôt" in l])
+assert abs(perUnit - (1000 - 60) / 3) < 0.01 and raw == 100 and out == 999202, up
+assert action == "Fabriquer", action
+assert "Fabrique-le plutôt : Bracelet" in tip, tip
+assert none is None and weakGain < 0, up
+print("OK : fabriquer plutôt que vendre le composant")

@@ -471,3 +471,85 @@ function Analysis.Crafts()
   end
   return out
 end
+
+-- Fabriquer plutôt que vendre brut ? Pour un composant, ce que rapporte chaque unité transformée :
+-- (valeur de l'objet fabriqué − autres composants) / quantité de ce composant, comparé à sa vente brute
+-- (le mieux entre l'HV nette et le PNJ). Recettes connues, plus celles que tu peux apprendre à ton niveau.
+Analysis.CRAFT_UP_MIN_GAIN = 0.10      -- fabriquer doit rapporter au moins 10 % de plus par composant…
+Analysis.CRAFT_UP_MIN_PER_CRAFT = 20   -- …et au moins 20c de plus par fabrication
+local CRAFT_UP_SLOW = 0.5              -- comme Bags.SLOW_PER_DAY : l'HV risque de ne rien vendre
+
+local function rawValue(id)
+  local s = Analysis.Get(id)
+  local meta = AHLedgerDB.items[id]
+  local vsell = meta and meta.s or 0
+  local ah = s and math.max(s.netExp or 0, 0) or 0
+  if ah > vsell then return ah, "HV" end
+  return vsell, vsell > 0 and "PNJ" or nil
+end
+
+local function craftUpEntry(id, raw, rec, learned, learnCost)
+  local q = rec.r[id]
+  local others = 0
+  for rid, n in pairs(rec.r) do
+    if rid ~= id then
+      local c = Analysis.ReagentCost(rid)
+      if not c then return nil end
+      others = others + c * n
+    end
+  end
+  local made = rec.made or 1
+  local so = Analysis.Get(rec.out)
+  local meta = AHLedgerDB.items[rec.out]
+  local vend = (meta and meta.s or 0) * made
+  local ah = so and math.max(so.netExp or 0, 0) * made or 0
+  local sellTo, value = "HV", ah
+  if vend >= ah then sellTo, value = "PNJ", vend end
+  if value <= 0 then return nil end
+  local perUnit = (value - others) / q
+  local gain = perUnit - raw
+  local e = { id = id, out = rec.out, name = rec.name or (meta and meta.n), prof = rec.prof, q = q, made = made,
+              others = others, value = value, perUnit = perUnit, raw = raw, gain = gain,
+              gainPct = raw > 0 and gain / raw or nil, sellTo = sellTo, learned = learned, learnCost = learnCost }
+  if sellTo == "HV" then
+    e.unsure = so.realPrice == nil
+    e.slow = so.perDay == nil or so.perDay < CRAFT_UP_SLOW
+    -- composants que l'HV absorbe par jour sous forme d'objet fabriqué (ta part du marché)
+    e.unitsPerDay = (so.perDay or 0) * Analysis.VENDOR_SHARE / made * q
+  end
+  return e
+end
+
+-- Meilleure transformation d'un composant, ou nil si vendre brut est aussi bien.
+-- 2e retour : la meilleure trouvée même si elle ne vaut pas la peine (pour l'affichage détaillé)
+function Analysis.CraftUp(id)
+  if not (ns.Prof and id) then return nil end
+  local raw = rawValue(id)
+  local best, seen = nil, {}
+  local function consider(e)
+    if e and (not best or e.perUnit > best.perUnit) then best = e end
+  end
+  for prof, list in pairs(ns.Prof.Recipes() or {}) do
+    for outId, r in pairs(list) do
+      if r.r and r.r[id] then
+        seen[outId] = true
+        consider(craftUpEntry(id, raw, { out = outId, prof = prof, r = r.r, made = r.m, name = r.n }, true))
+      end
+    end
+  end
+  -- recettes non apprises (base de recettes externe) accessibles à ton niveau
+  if ns.RecipeDB then
+    for prof, rank in pairs(ns.Prof.Char().skills or {}) do
+      for _, rec in ipairs(ns.RecipeDB.All(prof)) do
+        if rec.r[id] and not seen[rec.out] and not rec.learned and rec.source and rec.source.cost
+          and rec.levels and rec.levels[1] and rank >= rec.levels[1] then
+          consider(craftUpEntry(id, raw, rec, false, rec.source.cost))
+        end
+      end
+    end
+  end
+  if not best then return nil end
+  local worth = best.gain * best.q >= Analysis.CRAFT_UP_MIN_PER_CRAFT
+    and (not best.gainPct or best.gainPct >= Analysis.CRAFT_UP_MIN_GAIN)
+  return worth and best or nil, best
+end

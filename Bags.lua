@@ -114,7 +114,15 @@ function Bags.Advise(id, n)
   if e.value < Bags.MIN_VALUE then return nil end
   -- composant d'une de tes recettes rentables ?
   local rel = ns.Prof.Related()[id]
-  if rel == "composant" then e.why = e.why .. " · composant d'une de tes recettes" end
+  local up = ns.Analysis.CraftUp(id)
+  if up then
+    -- mieux vaut le transformer que le vendre tel quel
+    local name = up.name or (AHLedgerDB.items[up.out] and AHLedgerDB.items[up.out].n) or ("#" .. up.out)
+    e.craftUp = up
+    e.action, e.post, e.postQty = "Fabriquer", nil, nil
+    e.why = ("%s : %s/u au lieu de %s%s"):format(name, ns.money(up.perUnit), ns.money(up.raw),
+      up.learnCost and " (recette à apprendre)" or "")
+  elseif rel == "composant" then e.why = e.why .. " · composant d'une de tes recettes" end
   return e
 end
 

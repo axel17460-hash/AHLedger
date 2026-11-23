@@ -56,6 +56,25 @@ local function bookSummary(book)
   return qty, #book.levels, table.concat(parts, ", ")
 end
 
+-- Avertissement « fabrique-le plutôt » : { titre, détail } ou nil
+local ALERT = "|TInterface\\DialogFrame\\UI-Dialog-Icon-AlertNew:14:14|t "
+local function craftUpLines(id)
+  local u = ns.Analysis.CraftUp and ns.Analysis.CraftUp(id)
+  if not u then return nil end
+  local name = u.name or (AHLedgerDB.items[u.out] and AHLedgerDB.items[u.out].n) or ("#" .. u.out)
+  local pct = u.gainPct and (" (+%.0f %%)"):format(u.gainPct * 100) or ""
+  local head = ("%sFabrique-le plutôt : %s rapporte %s/u contre %s en vente brute%s"):format(
+    ALERT, name, ns.money(u.perUnit), ns.money(u.raw), pct)
+  local d = { ("%d par fabrication%s, vendu %s"):format(u.q, u.made > 1 and (" (%d fabriqués)"):format(u.made) or "",
+    u.sellTo) }
+  if u.others > 0 then d[#d + 1] = "autres composants " .. ns.money(u.others) end
+  if u.learnCost then d[#d + 1] = "recette à apprendre (" .. ns.money(u.learnCost) .. ")" end
+  if u.unitsPerDay then d[#d + 1] = ("l'HV en absorbe ~%.0f/j"):format(u.unitsPerDay) end
+  if u.slow then d[#d + 1] = "se vend peu" end
+  if u.unsure then d[#d + 1] = "prix affiché, aucune vente vue" end
+  return head, table.concat(d, " · ")
+end
+
 local function build(id)
   local db = ns.realmDB()
   local s = ns.Analysis.Get(id)
@@ -72,6 +91,8 @@ local function build(id)
     local c = ns.Bags.COLORS[cmp.kind]
     L[#L + 1] = { head, detail, color = c }
   end
+  local up, upDetail = craftUpLines(id)
+  if up then L[#L + 1] = { up, upDetail, color = { 1, 0.6, 0 } } end
 
   -- Prix
   if s then
@@ -221,6 +242,8 @@ local function buildCompact(id)
     local c = ns.Bags.COLORS[cmp.kind]
     L[#L + 1] = { head, r = c[1], g = c[2], b = c[3] }
   end
+  local up = craftUpLines(id)
+  if up then L[#L + 1] = { up, r = 1, g = 0.6, b = 0 } end
   local s = ns.Analysis.Get(id)
   local price = s and (s.minNow or s.realPrice or s.avg7)
   if price then

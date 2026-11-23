@@ -20,7 +20,7 @@ local DIFF = { optimal = "|cffff8040orange|r", medium = "|cffffff00jaune|r", eas
                trivial = "|cff808080gris|r" }
 
 local ADVICE = { ["Vendre HV"] = "|cff40ff40Vendre HV|r", Garder = "|cff66ccffGarder|r", PNJ = "|cffffd100PNJ|r",
-                 Attendre = "|cffff8040Attendre|r" }
+                 Attendre = "|cffff8040Attendre|r", Fabriquer = "|cffff9900Fabriquer|r" }
 
 -- « +45 % » coloré comme les pastilles des sacs : vert mieux à l'HV, jaune pareil, rouge au PNJ
 function UI.CompareCell(c)
