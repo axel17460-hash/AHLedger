@@ -250,5 +250,10 @@ subprocess.run([sys.executable, str(tool), "import", str(sv)], check=True, stdou
 subprocess.run([sys.executable, str(tool), "report", "--top", "3"], check=True)
 brief = subprocess.run([sys.executable, str(tool), "brief", str(sv)], check=True, capture_output=True, text=True).stdout
 assert "## Flips HV" in brief and "Mageweave Cloth" in brief
+import tempfile
+with tempfile.TemporaryDirectory() as d:
+    subprocess.run([sys.executable, str(tool), "sync", "--sv", str(sv), "--to", d, "--once"], check=True, stdout=subprocess.DEVNULL)
+    assert (Path(d) / "rapport.md").read_text(encoding="utf-8") == brief.rstrip("\n")
+    assert len(list((Path(d) / "historique").glob("rapport-*.md"))) == 1
 db.unlink(); sv.unlink()
 print("\nOK : tous les tests passent.")

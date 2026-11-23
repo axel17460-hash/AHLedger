@@ -30,6 +30,13 @@ Un addon ne peut pas communiquer avec l'extérieur. AHLedger prépare donc un ra
 - **En jeu** : `/ahl claude`, ou le bouton **Rapport Claude** de la fenêtre. Le texte est déjà sélectionné : Ctrl+C, puis colle-le dans une conversation avec Claude.
 - **Hors jeu** : le rapport est enregistré dans les SavedVariables après chaque scan et à la déconnexion. `python tools/ahledger.py brief ".../SavedVariables/AHLedger.lua" --out rapport.md` le ressort dans un fichier.
 
+### Synchro Google Drive (Claude lit le rapport tout seul)
+1. Installe **Google Drive pour ordinateur** sur le PC de jeu et connecte-toi avec le compte Google relié à Claude. Il crée le lecteur `G:\Mon Drive` (ou `My Drive`).
+2. Installe Python 3 (cocher « Add to PATH »).
+3. Lance `tools/sync_drive.bat` et laisse la fenêtre ouverte pendant que tu joues. Pour qu'il démarre tout seul, mets-en un raccourci dans le dossier Démarrage (`Win+R` puis `shell:startup`). Il trouve tout seul le fichier de l'addon et le dossier Drive ; sinon, ajoute `--sv "<...>\AHLedger.lua"` et/ou `--to "G:\Mon Drive\AHLedger"`.
+4. En jeu : un scan, puis `/reload` (ou déconnexion). Le jeu n'écrit ses fichiers qu'à ce moment-là. Le script copie alors le rapport dans `Mon Drive/AHLedger/rapport.md`, et garde les 30 derniers dans `historique/`.
+5. Dans Claude : « regarde mon HV ». Claude lit `rapport.md` dans ton Drive.
+
 ## Comment c'est calculé
 - **Prix** : le prix réel de vente, c'est-à-dire le prix des enchères disparues comme vendues, dès qu'au moins 5 unités ont été vues partir sur 7 jours. Avant ça, la médiane des prix affichés.
 - **Vendus/jour** : les unités disparues entre deux scans rapprochés, ramenées à 24 h. Une enchère compte comme vendue s'il lui restait plus de temps que l'écart entre les scans. Si elle était en « court », elle compte comme expirée. Les cas incertains comptent pour moitié.
