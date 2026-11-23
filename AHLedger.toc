@@ -4,7 +4,7 @@
 ## Author: Axel
 ## Version: 0.8.0
 ## SavedVariables: AHLedgerDB
-## OptionalDeps: Auctionator, DaylightUI, DaylightUI_AuctionHouse
+## OptionalDeps: Auctionator, DaylightUI, DaylightUI_AuctionHouse, OneForAll
 
 # 16001 = WoW Forever 1.60 (même valeur qu'Auctionator)
 
@@ -19,6 +19,7 @@ Professions.lua
 Bags.lua
 Ledger.lua
 RecipeDB.lua
+RecipesOneForAll.lua
 Export.lua
 Diag.lua
 Snipe.lua

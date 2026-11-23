@@ -329,6 +329,7 @@ function UI.Build()
       if id then
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:SetHyperlink("item:" .. id)
+        if ns.isAHOpen() then GameTooltip:AddLine("Clic : afficher à l'achat dans l'HV · Maj-clic : lien", 0.5, 0.8, 1) end
         GameTooltip:Show()
       end
     end)
@@ -340,6 +341,8 @@ function UI.Build()
         if link then ChatEdit_InsertLink(link) end
       elseif self.entry and MODES[UI.mode].onClick then
         MODES[UI.mode].onClick(self.entry)
+      elseif id then
+        UI.ShowItem(id)
       end
     end)
     UI.rows[r] = row
@@ -539,7 +542,17 @@ function UI.HookDaylightAH()
     if page then ns.safe("onglet Daylight UI", embed, page) end
   end)
   UI.dlTab = true
+  UI.dlMain = Main
   return true
+end
+
+-- Clic sur une ligne : l'objet s'affiche à l'achat dans l'HV (Achat de Daylight UI, Auctionator ou le jeu).
+-- AHLedger n'achète rien lui-même : le joueur choisit l'enchère et confirme dans l'écran d'achat.
+function UI.ShowItem(id)
+  local meta = AHLedgerDB.items[id]
+  local name = ns.GetItemInfo(id) or (meta and meta.n)
+  if not name or name == "" then return nil end
+  return ns.Snipe.Search({ id = id, name = name }, false)
 end
 
 -- Daylight UI construit sa fenêtre HV à PLAYER_LOGIN : on s'y accroche avant, au chargement d'AHLedger

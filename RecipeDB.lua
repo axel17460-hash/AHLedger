@@ -92,6 +92,7 @@ end
 
 -- Coût net d'une fabrication : composants (le moins cher PNJ/HV) − ce que rapporte l'objet fabriqué
 -- (HV nette si le marché l'absorbe, sinon prix PNJ). Renvoie nil si un composant n'a pas de prix.
+-- 4e et 5e retours : valeur au PNJ, et nombre de fabrications que l'HV absorbe (2 jours de ventes).
 function Plan.CraftCost(rec)
   local cost = 0
   for rid, n in pairs(rec.r) do
@@ -105,7 +106,8 @@ function Plan.CraftCost(rec)
   local vendor = (meta and meta.s or 0) * made
   local ah = (s and s.perDay and s.perDay >= 1) and math.max(s.netExp, 0) * made or 0
   local value = math.max(vendor, ah)
-  return cost - value, cost, value
+  local cap = ah > vendor and math.floor((s.perDay or 0) * 2 / made) or 0
+  return cost - value, cost, value, vendor, cap
 end
 
 -- Plan de fromRank à toRank. Renvoie { steps = { … }, total = cuivre, crafts = n, reached = rang atteint, partial = bool }
@@ -113,9 +115,11 @@ function Plan.Level(prof, fromRank, toRank)
   local recipes = RecipeDB.All(prof)
   local costs = {}
   for _, rec in ipairs(recipes) do
-    local net, cost, value = Plan.CraftCost(rec)
-    if net then costs[rec] = { net = net, cost = cost, value = value } end
+    local net, cost, value, vendor, cap = Plan.CraftCost(rec)
+    if net then costs[rec] = { net = net, cost = cost, value = value, vendor = vendor, cap = cap, done = 0 } end
   end
+  -- au-delà de ce que l'HV absorbe, l'objet fabriqué ne se revend plus qu'au PNJ
+  local function netNow(c) return c.done < c.cap and c.net or c.cost - c.vendor end
   local steps, total, crafts, learnedNow = {}, 0, 0, {}
   local rank = fromRank
   local partial = false
@@ -127,7 +131,7 @@ function Plan.Level(prof, fromRank, toRank)
       if chance > 0 then
         -- coût par point espéré ; une recette à acheter est pénalisée de son prix réparti sur 10 points
         local learnCost = (not rec.learned and not learnedNow[rec]) and rec.source.cost or 0
-        local score = c.net / chance + learnCost / 10
+        local score = netNow(c) / chance + learnCost / 10
         if not best or score < bestScore then best, bestScore, bestChance = rec, score, chance end
       end
     end
@@ -147,9 +151,11 @@ function Plan.Level(prof, fromRank, toRank)
     end
     last.to = rank + 1
     last.crafts = last.crafts + n
-    last.cost = last.cost + c.net * n
+    local net = netNow(c)
+    c.done = c.done + n
+    last.cost = last.cost + net * n
     crafts = crafts + n
-    total = total + c.net * n
+    total = total + net * n
     rank = rank + 1
   end
   for _, st in ipairs(steps) do
@@ -204,7 +210,7 @@ function Plan.Describe(p)
     local mats = {}
     for rid, q in pairs(st.mats) do mats[#mats + 1] = ("%d %s"):format(q, itemName(rid)) end
     table.sort(mats)
-    lines[#lines + 1] = ("%d → %d : %s ×%d (%s)%s — %s"):format(st.from, st.to, itemName(st.rec.out), st.craftsRounded,
+    lines[#lines + 1] = ("%d - %d : %s ×%d (%s)%s — %s"):format(st.from, st.to, itemName(st.rec.out), st.craftsRounded,
       table.concat(mats, ", "), st.learnCost > 0 and (" + recette " .. plain(ns.money(st.learnCost))) or "",
       st.cost >= 0 and ("coût net " .. plain(ns.money(st.cost))) or ("gain " .. plain(ns.money(-st.cost))))
   end
@@ -223,7 +229,7 @@ function Plan.Command(args)
   if not rank then ns.print("Métier inconnu pour ce personnage : " .. prof); return end
   local maxRank = ns.Prof.Char().max and ns.Prof.Char().max[prof] or rank + 25
   local p = Plan.Level(prof, rank, tonumber(target) or maxRank)
-  ns.print(("Montée %s %d → %d : %d fabrications, coût net %s"):format(ns.Prof.LABEL[prof] or prof, p.from, p.reached,
+  ns.print(("Montée %s %d - %d : %d fabrications, coût net %s"):format(ns.Prof.LABEL[prof] or prof, p.from, p.reached,
     math.ceil(p.crafts), plain(ns.money(p.total))))
   for _, l in ipairs(Plan.Describe(p)) do ns.print("  " .. l) end
   if p.partial then

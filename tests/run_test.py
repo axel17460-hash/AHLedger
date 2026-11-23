@@ -98,8 +98,8 @@ full = ns.Plan.Level("firstaid", 220, 240)
 print("Plan secourisme 220 → 240 :", [strip(l) for l in ns.Plan.Describe(full).values()])
 assert not full.partial and full.reached == 240 and full.crafts >= 20
 lua.execute("SlashCmdList.AHLEDGER('monter secourisme 230')")
-assert "Montée Secourisme 220 → 230" in strip(list(lua.eval("LOG").values())[-3]) or any(
-    "Montée Secourisme 220 → 230" in strip(m) for m in list(lua.eval("LOG").values())[-6:])
+assert "Montée Secourisme 220 - 230" in strip(list(lua.eval("LOG").values())[-3]) or any(
+    "Montée Secourisme 220 - 230" in strip(m) for m in list(lua.eval("LOG").values())[-6:])
 # Diagnostic
 lua.execute("SlashCmdList.AHLEDGER('diag')")
 diag = [strip(l) for l in lua.eval("AHLedgerDB.diag.lines").values()]
@@ -389,5 +389,87 @@ fb = lua.eval("""function(ns)
   return hooked, shown, hidden, mover
 end""")(ns)
 assert fb[0] is False and fb[1] and fb[2] and fb[3] == "ahbutton", fb
+
+# Adaptateur OneForAll : table globale factice au format de OneForAll, branchée quand l'addon se charge
+ofa = lua.eval("""function(ns)
+  OneForAll = {
+    PROFESSION_RECIPES = { ["Leatherworking"] = {
+      { s = 1, i = 2304, c = 1, n = "Kit d'office", req = 1, y = 30, g = 45, gr = 60, r = { { 4306, 1, "Soie" } }, start = true },
+      { s = 2, i = 5957, n = "Gilet du maître", req = 10, y = 40, g = 55, gr = 70, r = { { 4306, 2, "Soie" }, { 3371, 1, "Fiole" } } },
+      { s = 3, i = 4237, n = "Ceinture Horde", req = 20, y = 50, g = 60, gr = 70, r = { { 2592, 3, "Laine" } }, ri = 9001,
+        src = { v = { { 10, "Marchande A", "Hurlevent", fac = "A" }, { 11, "Marchand H", "Orgrimmar", fac = "H" } } } },
+      { s = 4, i = 4238, n = "Ceinture Alliance", req = 20, y = 50, g = 60, gr = 70, r = { { 2592, 2, "Laine" } }, ri = 9002,
+        src = { v = { { 10, "Marchande A", "Hurlevent", fac = "A" } } } },
+      { s = 5, i = 4239, n = "Butin vendu à l'HV", req = 30, y = 60, g = 70, gr = 80, r = { { 2592, 1, "Laine" } }, ri = 4306,
+        src = { d = { { 12, "Ogre", "Les Paluns" } } } },
+      { s = 6, i = 4240, n = "Récompense", req = 30, y = 60, g = 70, gr = 80, r = { { 2592, 1, "Laine" } }, ri = 9003,
+        src = { qs = { { 769, "Sac en peau" } } } },
+      { s = 7, i = 4241, n = "Sans composant", req = 1, y = 1, g = 1, gr = 1, r = {} },
+    } },
+    PROFESSION_FEES = { ["Leatherworking"] = { fees = { [2] = { 150, 10 } } } },
+    VENDOR_PRICES = { [9001] = 1200, [9002] = 900 },
+  }
+  local before = ns.RecipeDB.providers.OneForAll ~= nil
+  fire("ADDON_LOADED", "OneForAll")
+  local by = {}
+  for _, r in ipairs(ns.RecipesOneForAll.Recipes("leatherworking")) do by[r.out] = r end
+  local plan = ns.Plan.Level("leatherworking", 1, 60)
+  SlashCmdList.AHLEDGER("diag")
+  local diagOk = false
+  for _, l in ipairs(AHLedgerDB.diag.lines) do if l:find("Recettes OneForAll : 7", 1, true) then diagOk = true end end
+  return before, ns.RecipeDB.providers.OneForAll ~= nil, by, plan.partial, plan.reached, diagOk,
+         #ns.RecipesOneForAll.Recipes("cooking")
+end""")(ns)
+before, registered, by, ofaPartial, ofaReached, ofaDiag, cookingN = ofa
+assert before is False and registered is True
+assert by[2304].source.cost == 0 and list(by[2304].levels.values()) == [1, 30, 45, 60] and by[2304].r[4306] == 1
+assert by[5957].source.kind == "trainer" and by[5957].source.cost == 150 and by[5957].r[3371] == 1
+assert by[4237].source.cost == 1200 and "Orgrimmar" in by[4237].source.where   # marchand de ma faction (Horde)
+assert by[4238].source.cost is None                                              # marchand Alliance seulement
+assert by[4239].source.kind == "drop" and by[4239].source.cost and by[4239].source.where.startswith("HV")
+assert by[4240].source.kind == "quest" and by[4240].source.cost is None
+assert 4241 not in by and cookingN == 0
+assert ofaPartial is False and ofaReached == 60 and ofaDiag, (ofaPartial, ofaReached)
+
+# Planificateur : l'HV n'absorbe qu'environ 2 jours de ventes, le reste ne vaut que le prix PNJ
+cap = lua.eval("""function(ns)
+  ns.RecipeDB.Register("plafond", { Recipes = function(prof)
+    if prof ~= "tailoring" then return {} end
+    return { { out = 4306, prof = prof, r = { [2592] = 1 }, made = 20, levels = { 1, 1, 1, 400 }, learned = true } }
+  end })
+  local rec = ns.RecipeDB.All("tailoring")[1]
+  local net, cost, value, vendor, cap = ns.Plan.CraftCost(rec)
+  local p = ns.Plan.Level("tailoring", 1, 150)
+  return net, cost, vendor, cap, p.crafts, p.total
+end""")(ns)
+cNet, cCost, cVendor, cCap, cCrafts, cTotal = cap
+assert cCap >= 1 and cCrafts > cCap, cap
+expected = cCap * cNet + (cCrafts - cCap) * (cCost - cVendor)
+# le point qui franchit le plafond compte encore ses quelques fabrications au prix HV
+assert 0 <= expected - cTotal <= 5 * abs(cNet - (cCost - cVendor)), (cTotal, expected)
+assert cTotal > cCrafts * cNet, cap                                  # moins optimiste que sans plafond
+
+# Clic sur une ligne : l'objet s'affiche à l'achat, dans la fenêtre HV de Daylight UI ou celle du jeu
+show = lua.eval("""function(ns)
+  local texts, started, mode = {}, 0, nil
+  local box = { SetText = function(_, t) texts[#texts + 1] = t end }
+  AuctionHouseFrame = { SearchBar = { SearchBox = box, StartSearch = function() started = started + 1 end },
+    IsShown = function() return true end, SetDisplayMode = function(_, m) mode = m end }
+  AuctionHouseFrameDisplayMode = { Buy = "achat" }
+  local savedQuery = QueryAuctionItems
+  QueryAuctionItems = nil
+  fire("AUCTION_HOUSE_SHOW")
+  ns.UI.dlMain = { frame = { IsShown = function() return true end } }
+  local r1 = ns.UI.ShowItem(4306)
+  local dlTexts, dlStarted = texts[#texts], started            -- Daylight lance lui-même la recherche
+  ns.UI.dlMain = nil
+  local r2 = ns.UI.ShowItem(4306)
+  local row = ns.UI.rows[1]
+  QueryAuctionItems = savedQuery
+  AuctionHouseFrame, AuctionHouseFrameDisplayMode = nil, nil
+  return r1, dlTexts, dlStarted, r2, started, mode, texts[#texts], AHLedgerDB.items[4306].n
+end""")(ns)
+assert show[0] == "daylight" and show[1] == show[7] and show[2] == 0, show
+assert show[3] == "jeu" and show[4] == 1 and show[5] == "achat" and show[6] == show[7], show
 
 print("\nOK : tous les tests passent.")

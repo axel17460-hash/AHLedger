@@ -17,7 +17,7 @@ read_globals = {
   "ChatEdit_InsertLink", "IsModifiedClick", "TooltipDataProcessor", "Enum", "C_EventUtils",
   "C_Item", "GetItemInfo",
   "C_AuctionHouse", "QueryAuctionItems", "CanSendAuctionQuery", "GetNumAuctionItems", "GetAuctionItemInfo",
-  "GetAuctionItemTimeLeft", "GetAuctionItemLink", "AuctionFrame", "AuctionHouseFrame", "AuctionFrameTab1",
+  "GetAuctionItemTimeLeft", "GetAuctionItemLink", "AuctionFrame", "AuctionHouseFrame", "AuctionHouseFrameDisplayMode", "AuctionFrameTab1",
   "AuctionFrameTab_OnClick", "BrowseName", "GetFramesRegisteredForEvent", "Auctionator",
   "GetMerchantNumItems", "GetMerchantItemInfo", "GetMerchantItemLink", "C_MerchantFrame",
   "C_Container", "GetContainerNumSlots", "GetContainerItemInfo",
@@ -28,5 +28,5 @@ read_globals = {
   "GetTradeSkillNumReagents", "GetTradeSkillReagentInfo", "GetTradeSkillReagentItemLink", "C_TradeSkillUI",
   "LOOT_ITEM_SELF", "LOOT_ITEM_SELF_MULTIPLE", "LOOT_ITEM_PUSHED_SELF", "LOOT_ITEM_PUSHED_SELF_MULTIPLE",
   "GetLootSlotLink", "GetNumLootItems", "GetLootSlotInfo",
-  "DaylightUI", "C_AddOns", "IsAddOnLoaded",
+  "DaylightUI", "OneForAll", "C_AddOns", "IsAddOnLoaded",
 }

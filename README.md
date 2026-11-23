@@ -24,6 +24,7 @@ Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l
 - Pendant que tu navigues normalement à l'HV, une alerte apparaît dans le chat dès qu'une page affichée contient une affaire à revendre au PNJ.
 - Le prix de rachat PNJ vient du client lui-même : c'est le 11e retour de `GetItemInfo` (sellPrice), la même source qu'Auctionator. Si un objet n'est pas encore dans le cache du client, l'addon le complète à la réception de `GET_ITEM_INFO_RECEIVED`. Les prix d'achat chez les PNJ, eux, ne sont relevés que quand tu ouvres un marchand.
 - Les tooltips d'objets affichent le prix, la tendance, les ventes par jour et les signaux.
+- **Clic sur une ligne, HV ouverte** : l'objet s'affiche à l'achat. Avec Daylight UI, c'est son onglet Acheter (AHLedger remplit la case de recherche du jeu, que Daylight UI surveille comme pour un Maj-clic sur un objet des sacs) ; sinon la recherche d'Auctionator, sinon l'onglet Acheter du jeu. Maj-clic met le lien dans le chat. AHLedger n'achète rien lui-même : tu choisis l'enchère et tu confirmes dans l'écran d'achat (règles Blizzard, et pas d'achat par erreur depuis une liste d'analyse).
 
 ## Daylight UI
 - Avec Daylight UI, les fenêtres d'AHLedger (analyse et rapport) prennent son allure : coque de fenêtre, police, couleurs, accent et boutons choisis par le joueur. Tout passe par son API publique `DaylightUI.API` (`Look.lua`) ; sans Daylight UI, ce sont les modèles du jeu.
@@ -65,8 +66,9 @@ Un addon ne peut pas communiquer avec l'extérieur. AHLedger prépare donc un ra
 
 ## Métiers
 - **Montée de niveau** : dans l'onglet Artisanat, le bouton **Vue : montée de niveau** classe tes recettes par coût d'un point de compétence : (composants − revente) ÷ chance de gain. Un coût négatif veut dire que tu montes en gagnant de l'or.
-- `/ahl monter cuir 225` donne le plan complet : quelles recettes fabriquer, combien de fois, les composants à réunir et le coût net. Tant qu'aucun addon de recettes n'est branché, seule la couleur actuelle de tes recettes est connue : le plan s'arrête après quelques points et le signale.
-- **Brancher un addon de recettes** : `ns.RecipeDB.Register(nom, { Recipes = function(métier) … end })` dans `RecipeDB.lua`. Le format attendu (seuils jaune/vert/gris, source et prix de la recette) est décrit en tête du fichier. Le planificateur et l'onglet Montée s'en servent aussitôt.
+- `/ahl monter cuir 225` donne le plan complet : quelles recettes fabriquer, combien de fois, les composants à réunir et le coût net. Sans addon de recettes (OneForAll absent), seule la couleur actuelle de tes recettes est connue : le plan s'arrête après quelques points et le signale.
+- **OneForAll** (addon compagnon de Forever) est lu s'il est installé : toutes les recettes du client Forever avec leurs seuils jaune/vert/gris, le niveau pour les apprendre et leur source (maître et son prix, marchand de ta faction et son prix, butin, quête). Une recette de butin ou payée en faveur marchande prend le prix de son objet-recette à l'HV s'il y est vu. Le plan `/ahl monter` va alors jusqu'au bout et propose les recettes à acheter. L'adaptateur (`RecipesOneForAll.lua`) lit sa table globale `OneForAll` au moment du calcul, sans rien recopier. `/ahl diag` indique combien de recettes il a lues.
+- **Brancher un autre addon de recettes** : `ns.RecipeDB.Register(nom, { Recipes = function(métier) … end })` dans `RecipeDB.lua`. Le format attendu (seuils jaune/vert/gris, source et prix de la recette) est décrit en tête du fichier. Le planificateur et l'onglet Montée s'en servent aussitôt.
 - `/ahl metiers` affiche tes niveaux, le niveau maximal des monstres que tu peux dépecer, et les métiers dont les recettes ne sont pas encore relevées.
 - La catégorie **Mes métiers** de l'onglet Marché ne montre que ce qui te concerne : ce que tu peux dépecer, ce que tu fabriques et leurs composants.
 - Les seuils de dépeçage des cuirs et écailles (`Professions.lua`) sont approximatifs.

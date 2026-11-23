@@ -108,6 +108,9 @@ function Diag.Run()
     GetBuildInfo and table.concat({ tostring((GetBuildInfo())), tostring(select(4, GetBuildInfo())) }, " / ") or "?")
   local recipesSrc = ns.RecipeDB and ns.RecipeDB.ProviderNames() or {}
   lines[#lines + 1] = "Sources de recettes : " .. (#recipesSrc > 0 and table.concat(recipesSrc, ", ") or "aucune")
+  local ofa = ns.RecipesOneForAll and ns.RecipesOneForAll.Count()
+  lines[#lines + 1] = ofa and ("Recettes OneForAll : %d (seuils, sources et prix)"):format(ofa)
+    or "Recettes OneForAll : addon absent (plan de montée limité à tes recettes connues)"
 
   AHLedgerDB.diag = { t = time(), ok = ok, lines = lines }
   return ok, lines
