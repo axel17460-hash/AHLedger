@@ -87,10 +87,22 @@ function Export.Build()
   add("")
   add("## Flips HV possibles (dernier scan)")
   local flips = sorted(A.Flips(), "profit", Export.TOP.flip)
-  if #flips == 0 then add("aucun") end
+  if #flips == 0 then add("aucun") else add("« tout de suite » = remettre en vente aussitôt ; « à stocker » = tout le marché est bas, garder jusqu'au rebond (bénéfice espéré, d'après les creux passés de l'objet)") end
   for _, f in ipairs(flips) do
-    add("%s : acheter %d jusqu'à %s/u (coût %s), revendre %s/u → bénéfice %s (ROI %.0f%%, écoulé en %.1f j)",
-      nameOf(f.id, f.s), f.qty, g(f.maxBuy), g(f.cost), g(f.resale), g(f.profit), f.roi * 100, f.days)
+    if f.kind == "stock" then
+      local odds = f.known and ("%d creux sur %d remontés, délai médian %s j, lent %s j"):format(
+        f.recovered, f.events, tostring(f.wait or "?"), tostring(f.slow or "?"))
+        or ("rebond inconnu (%d creux vus), quantité de test"):format(f.events or 0)
+      add("%s [à stocker] : acheter %d jusqu'à %s/u (coût %s), revendre %s/u au rebond (prix d'aujourd'hui %s/u) → espéré %s (si rebond %s, sinon %s ; ROI %.0f%%) — %s%s",
+        nameOf(f.id, f.s), f.qty, g(f.maxBuy), g(f.cost), g(f.resale), g(f.resaleNow), g(f.profit), g(f.ifUp), g(f.ifDown),
+        f.roi * 100, odds, f.weekday and (", meilleur jour de vente : " .. f.weekday.name) or "")
+    else
+      add("%s [tout de suite] : acheter %d jusqu'à %s/u (coût %s), revendre %s/u → bénéfice %s (ROI %.0f%%, écoulé en %.1f j)",
+        nameOf(f.id, f.s), f.qty, g(f.maxBuy), g(f.cost), g(f.resale), g(f.profit), f.roi * 100, f.days)
+    end
+    if f.mine then
+      add("  tes reventes : %d achetés puis revendus, gardés ~%.1f j, %s/u", f.mine.units, f.mine.days, g(f.mine.profit))
+    end
   end
 
   add("")

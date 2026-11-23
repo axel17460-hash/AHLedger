@@ -237,6 +237,42 @@ function Ledger.Summary()
   return out, tot
 end
 
+-- Tes flips réels : chaque vente est rapprochée de tes achats précédents du même objet, le plus ancien
+-- d'abord. Donne, par objet, les unités rachetées puis revendues, le temps moyen entre l'achat et la vente
+-- (dates de lecture des courriers : approximatif, à quelques heures près) et le bénéfice net par unité.
+-- holds[id] = { units, days, profit (par unité, commission déduite) }
+function Ledger.Holds()
+  local rows = {}
+  for _, e in ipairs(Ledger.DB().ledger) do
+    if e.id and e.t and (e.c or 0) > 0 and (e.k == "bought" or e.k == "sold") then rows[#rows + 1] = e end
+  end
+  table.sort(rows, function(a, b) return a.t < b.t end)
+  local queues, acc = {}, {}
+  for _, e in ipairs(rows) do
+    local q = queues[e.id]
+    if not q then q = {}; queues[e.id] = q end
+    if e.k == "bought" then
+      q[#q + 1] = { t = e.t, left = e.c, unit = (e.g or 0) / e.c }
+    else
+      local left, unitNet = e.c, ((e.g or 0) - (e.cut or 0)) / e.c
+      while left > 0 and q[1] do
+        local b = q[1]
+        local m = math.min(left, b.left)
+        local a = acc[e.id]
+        if not a then a = { units = 0, daySum = 0, gain = 0 }; acc[e.id] = a end
+        a.units = a.units + m
+        a.daySum = a.daySum + m * (e.t - b.t) / 86400
+        a.gain = a.gain + m * (unitNet - b.unit)
+        left, b.left = left - m, b.left - m
+        if b.left <= 0 then table.remove(q, 1) end
+      end
+    end
+  end
+  local out = {}
+  for id, a in pairs(acc) do out[id] = { units = a.units, days = a.daySum / a.units, profit = a.gain / a.units } end
+  return out
+end
+
 ns.on("MAIL_INBOX_UPDATE", function() Ledger.ReadInbox() end)
 ns.on("PLAYER_LOGIN", function() Ledger.Repair(); Ledger.Calibrate() end)
 

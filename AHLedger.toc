@@ -12,6 +12,7 @@ Core.lua
 Look.lua
 History.lua
 Analysis.lua
+Rebound.lua
 Scan.lua
 Vendor.lua
 Farm.lua

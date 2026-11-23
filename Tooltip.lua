@@ -11,12 +11,27 @@ local function trendText(v, suffix)
   return arrow .. ns.pct(v) .. (suffix or "")
 end
 
-local function verdict(s)
+-- role.crafted : tu le fabriques avec bénéfice ; role.reagent : composant d'une de tes recettes.
+-- Le conseil change selon que tu vends l'objet ou que tu l'achètes.
+local function verdict(s, role)
   local t = s.trend24 or s.trend
   if not t then return nil end
+  role = role or {}
   local rising, falling = t >= 0.03, t <= -0.03
   local cheap = s.vsAvg and s.vsAvg <= -0.10
   local dear = s.vsAvg and s.vsAvg >= 0.10
+  if role.crafted then
+    if falling then return "|cffffd100Rentable mais prix en baisse : fabrique et vends tout de suite, ne stocke pas|r" end
+    if rising then return "|cff40ff40Rentable et prix en hausse : bon moment pour fabriquer|r" end
+    return "|cff40ff40Rentable à fabriquer, marché stable|r"
+  end
+  if role.reagent then
+    if falling then return "|cffffd100Composant en baisse : attends pour acheter (vends vite ton surplus)|r" end
+    if rising and cheap then return "|cff40ff40Composant en hausse et sous la moyenne : achète maintenant|r" end
+    if rising then return "|cffffd100Composant en hausse : achète tôt, garde ton stock|r" end
+    if cheap then return "|cff40ff40Composant sous la moyenne : bon moment pour acheter|r" end
+    return "|cffccccccMarché stable|r"
+  end
   if rising and cheap then return "|cff40ff40Prix en hausse et sous la moyenne : bon moment pour acheter / farmer|r" end
   if rising then return "|cff40ff40Prix en hausse : garder son stock, farmer|r" end
   if falling and dear then return "|cffff5050Prix en baisse et encore cher : vendre maintenant|r" end
@@ -97,9 +112,27 @@ local function build(id)
 
     -- Opportunités
     local f = book and ns.Analysis.FlipFor(s, book)
-    if f then
-      line(("Flip : acheter %d jusqu'à %s, revendre %s → +%s (ROI %.0f%%)"):format(
+    if f and f.kind == "stock" then
+      line(("Flip à stocker : acheter %d jusqu'à %s, revendre %s quand le prix remonte → ~+%s espéré"):format(
+        f.qty, ns.money(f.maxBuy), ns.money(f.resale), ns.money(f.profit)), 0.4, 0.8, 1)
+      if f.known then
+        line(("  %d creux sur %d remontés, en ~%s j (lent : %s j) ; sans rebond %s"):format(f.recovered, f.events,
+          tostring(f.wait or "?"), tostring(f.slow or "?"), ((f.ifDown >= 0 and "+" or "") .. ns.money(f.ifDown))), 0.7, 0.7, 0.7)
+      else
+        line(("  Rebond encore inconnu (%d creux vus) : teste petit ; sans rebond %s"):format(
+          f.events or 0, ((f.ifDown >= 0 and "+" or "") .. ns.money(f.ifDown))), 1, 0.6, 0)
+      end
+      if f.weekday then
+        line(("  Meilleur jour pour vendre : %s (+%.0f %%)"):format(f.weekday.name, f.weekday.gain * 100), 0.7, 0.7, 0.7)
+      end
+    elseif f then
+      line(("Flip : acheter %d jusqu'à %s, revendre tout de suite %s → +%s (ROI %.0f%%)"):format(
         f.qty, ns.money(f.maxBuy), ns.money(f.resale), ns.money(f.profit), f.roi * 100), 0.4, 1, 0.4)
+    end
+    local held = ns.Ledger.Holds()[id]
+    if held and held.units > 0 then
+      line(("Tes reventes : %d achetés puis revendus, gardés ~%.1f j, %s/u"):format(
+        held.units, held.days, (held.profit >= 0 and "+" or "-") .. ns.money(math.abs(held.profit))), 0.7, 0.7, 0.7)
     end
     local vf = vendor and ns.Analysis.VendorFlip(id, s, vendor, ns.Analysis.RealSales())
     if vf then
@@ -113,6 +146,7 @@ local function build(id)
   end
 
   -- Métiers : ce que tu fabriques avec, ou ce que ça te coûte à fabriquer
+  local role = {}
   if ns.Prof then
     for prof, list in pairs(ns.Prof.Recipes()) do
       local r = list[id]
@@ -120,6 +154,7 @@ local function build(id)
         for _, c in ipairs(ns.Analysis.Crafts()) do
           if c.id == id and c.prof == prof then
             if c.cost then
+              if c.profit and c.profit > 0 then role.crafted = true end
               line(("Tu le fabriques : coût %s, bénéfice %s (%s)"):format(ns.money(c.cost), ns.money(c.profit), c.sellTo or "?"),
                 0.6, 0.9, 1)
             else
@@ -137,6 +172,7 @@ local function build(id)
       end
     end
     if #uses > 0 then
+      role.reagent = true
       table.sort(uses)
       local more = #uses > 3 and (" +%d"):format(#uses - 3) or ""
       line("Composant de : " .. table.concat(uses, ", ", 1, math.min(3, #uses)) .. more, 0.6, 0.9, 1)
@@ -166,7 +202,7 @@ local function build(id)
   end
 
   if s then
-    local v = verdict(s)
+    local v = verdict(s, role)
     if v then line(v) end
     local sig = {}
     for _, x in ipairs(s.signals) do if x ~= "hausse" and x ~= "baisse" then sig[#sig + 1] = x end end

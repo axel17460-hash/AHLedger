@@ -328,8 +328,19 @@ def find_saved_variables():
     return max(found, key=os.path.getmtime) if found else None
 
 
-def find_drive_folder():
-    """Le dossier « Mon Drive » de Google Drive pour ordinateur (Windows : lecteur G: par défaut ; macOS : CloudStorage)."""
+def find_drive_folder(candidates=None):
+    """Le dossier « Mon Drive » de Google Drive pour ordinateur (Windows : lecteur G: par défaut ; macOS : CloudStorage).
+    Avec plusieurs comptes Google (un lecteur chacun), on prend celui qui a déjà un dossier AHLedger."""
+    if candidates is None:
+        candidates = drive_candidates()
+    found = [c for c in candidates if os.path.isdir(c)]
+    for c in found:
+        if os.path.isdir(os.path.join(c, "AHLedger")):
+            return c
+    return found[0] if found else None
+
+
+def drive_candidates():
     candidates = []
     if os.name == "nt":
         for letter in "GHIJKLMNOPQRSTUVWXYZDEF":
@@ -337,10 +348,7 @@ def find_drive_folder():
     home = Path.home()
     candidates += [str(p) for p in home.glob("Library/CloudStorage/GoogleDrive-*/*") if p.name in DRIVE_NAMES]
     candidates += [str(home / "Google Drive" / name) for name in DRIVE_NAMES] + [str(home / "Google Drive")]
-    for c in candidates:
-        if os.path.isdir(c):
-            return c
-    return None
+    return candidates
 
 
 def write_report(sv, dest):

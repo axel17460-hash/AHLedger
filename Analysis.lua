@@ -13,6 +13,10 @@ Analysis.HEAVY_STOCK_DAYS = 7   -- au-delà de 7 jours de ventes déjà en rayon
 Analysis.FLIP_HOLD_DAYS = 2     -- on n'achète pas plus que ce qui se revend en 2 jours
 Analysis.FLIP_MIN_ROI = 0.15    -- marge mini de 15 % après commission et dépôts
 Analysis.FLIP_MIN_PROFIT = 2000 -- 20 pa mini par opération
+-- Flip à stocker : le marché entier est bas, on achète et on attend que le prix remonte
+Analysis.FLIP_STORE_MIN_ROI = 0.25  -- l'or reste immobilisé et le prix peut ne pas remonter : marge mini plus haute
+Analysis.FLIP_STORE_GAP = 0.10      -- le prix habituel doit dépasser d'au moins 10 % la revente possible tout de suite
+Analysis.FLIP_TEST_DAYS = 0.5       -- rebonds encore inconnus : on n'achète qu'une demi-journée de ventes
 
 local History = ns.History
 
@@ -232,6 +236,7 @@ function Analysis.All()
   if cache and cacheVersion == ns.dataVersion and cacheRealm == key then return cache end
   local db = ns.realmDB()
   local today = History.today()
+  if ns.Rebound then ns.Rebound.Update(db, today) end
   local list, byId = {}, {}
   for id in pairs(db.hist or {}) do
     local s = Analysis.ItemStats(db, id, today)
@@ -336,42 +341,89 @@ function Analysis.FarmZones()
   return out
 end
 
--- Flip HV : enchères sous le prix réel de vente, à racheter puis remettre en vente.
--- On parcourt le carnet d'ordres du dernier scan du moins cher au plus cher : acheter plus de niveaux
--- remonte le prix auquel on pourra revendre (juste sous la prochaine enchère restante), mais coûte
--- plus cher. On garde la quantité qui maximise le bénéfice.
-function Analysis.FlipFor(s, book)
+-- Parcourt le carnet d'ordres du moins cher au plus cher, jusqu'à cap unités. Pour chaque quantité :
+-- fn(quantité, coût, prix max payé, prochaine enchère qui restera en vente après nos achats)
+local function walkBook(levels, cap, fn)
+  local qty, cost = 0, 0
+  for k, l in ipairs(levels) do
+    local take = math.min(l[2], cap - qty)
+    if take <= 0 then break end
+    qty, cost = qty + take, cost + take * l[1]
+    fn(qty, cost, l[1], take < l[2] and l[1] or (levels[k + 1] and levels[k + 1][1]))
+  end
+end
+
+-- Flip HV : enchères sous le prix de vente, à racheter puis remettre en vente. Deux cas :
+-- * kind = "now" (tout de suite) : un vendeur brade, mais il reste en vente des enchères au prix
+--   habituel. Acheter plus de niveaux remonte le prix auquel on pourra revendre (juste sous la prochaine
+--   enchère restante), mais coûte plus cher : on garde la quantité qui maximise le bénéfice.
+-- * kind = "stock" (à stocker) : tout le marché est bas, la revente possible tout de suite ne paie pas.
+--   On achète pour revendre au prix habituel d'avant le creux quand il remonte. Bénéfice espéré =
+--   chance de remonter × revente au prix habituel + chance de ne pas remonter × revente au prix d'aujourd'hui,
+--   d'après les creux passés de l'objet (ns.Rebound). Tant qu'ils sont inconnus : une chance sur deux,
+--   et on n'achète qu'une demi-journée de ventes, pour apprendre.
+-- Revendre tout de suite passe avant stocker quand les deux sont possibles.
+function Analysis.FlipFor(s, book, odds)
   if not (s and book and s.realPrice and s.perDay and s.perDay >= 1) then return nil end
   local target = s.realPrice
   if s.avg7 and s.avg7 < target then target = s.avg7 end -- prudence : on ne revend pas au-dessus du prix affiché moyen
   local st = math.max(s.sellThrough or 0.67, 0.1)
   local depLoss = s.deposit * (1 - st) / st
-  local maxQty = math.floor(s.perDay * Analysis.FLIP_HOLD_DAYS)
+  local function net(p) return p * (1 - Analysis.AH_CUT) - depLoss end
   local levels = book.levels
-  local best, qty, cost = nil, 0, 0
-  for k, l in ipairs(levels) do
-    local take = math.min(l[2], maxQty - qty)
-    if take <= 0 then break end
-    qty, cost = qty + take, cost + take * l[1]
-    -- prochaine enchère qui restera en vente après nos achats
-    local nextP = take < l[2] and l[1] or (levels[k + 1] and levels[k + 1][1])
+
+  local now
+  walkBook(levels, math.floor(s.perDay * Analysis.FLIP_HOLD_DAYS), function(qty, cost, maxBuy, nextP)
     local resale = math.min(target, nextP and (nextP - 1) or target)
-    local unitNet = resale * (1 - Analysis.AH_CUT) - depLoss
-    local profit = unitNet * qty - cost
-    if profit > 0 and (not best or profit > best.profit) then
-      best = { id = s.id, s = s, qty = qty, cost = cost, maxBuy = l[1], resale = resale,
-               profit = profit, roi = profit / math.max(cost, 1), days = qty / s.perDay, name = s.name }
+    local profit = net(resale) * qty - cost
+    if profit > 0 and (not now or profit > now.profit) then
+      now = { kind = "now", id = s.id, s = s, qty = qty, cost = cost, maxBuy = maxBuy, resale = resale,
+              profit = profit, roi = profit / math.max(cost, 1), days = qty / s.perDay, name = s.name }
     end
-  end
-  if best and best.roi >= Analysis.FLIP_MIN_ROI and best.profit >= Analysis.FLIP_MIN_PROFIT then return best end
+  end)
+  if now and now.roi >= Analysis.FLIP_MIN_ROI and now.profit >= Analysis.FLIP_MIN_PROFIT then return now end
+
+  if odds == nil and ns.Rebound then odds = ns.Rebound.Now(ns.realmDB(), s.id) end
+  if not (odds and odds.ref) then return nil end
+  -- un marché qui baisse régulièrement n'est pas un creux, sauf si l'objet a prouvé qu'il remonte
+  if s.trend and s.trend <= -0.03 and not (odds.known and odds.rate >= 0.6) then return nil end
+  local storeAt = odds.ref * (1 - ns.Rebound.RECOVER)
+  local cap = odds.known and math.floor(s.perDay * Analysis.FLIP_HOLD_DAYS)
+    or math.max(1, math.floor(s.perDay * Analysis.FLIP_TEST_DAYS))
+  local stock
+  walkBook(levels, cap, function(qty, cost, maxBuy, nextP)
+    local nowAt = math.min(target, nextP and (nextP - 1) or target)
+    if storeAt < nowAt * (1 + Analysis.FLIP_STORE_GAP) then return end
+    local ifUp, ifDown = net(storeAt) * qty - cost, net(nowAt) * qty - cost
+    local profit = odds.rate * ifUp + (1 - odds.rate) * ifDown
+    if profit > 0 and (not stock or profit > stock.profit) then
+      stock = { kind = "stock", id = s.id, s = s, qty = qty, cost = cost, maxBuy = maxBuy, resale = storeAt,
+                resaleNow = nowAt, ifUp = ifUp, ifDown = ifDown, profit = profit, roi = profit / math.max(cost, 1),
+                rate = odds.rate, wait = odds.wait, slow = odds.slow, events = odds.n, recovered = odds.ok, known = odds.known,
+                weekday = odds.weekday, ref = odds.ref, name = s.name,
+                days = (odds.wait or 0) + qty / s.perDay }
+    end
+  end)
+  if stock and stock.roi >= Analysis.FLIP_STORE_MIN_ROI and stock.profit >= Analysis.FLIP_MIN_PROFIT then return stock end
+end
+
+-- « Revendre tout de suite » / « Stocker ~3 j (70 %) » / « Stocker ? (à tester) »
+function Analysis.FlipWhen(f)
+  if f.kind ~= "stock" then return "tout de suite" end
+  if not f.known then return "stocker ? (à tester)" end
+  return ("stocker ~%s j (%.0f%%)"):format(f.wait and tostring(f.wait) or "?", f.rate * 100)
 end
 
 function Analysis.Flips()
   local db, out = ns.realmDB(), {}
   if not db.book then return out end
+  local mine = ns.Ledger and ns.Ledger.Holds and ns.Ledger.Holds() or {}
   for id, s in pairs(Analysis.All().byId) do
     local f = Analysis.FlipFor(s, ns.Scan.UnpackBook(db.book[id]))
-    if f then out[#out + 1] = f end
+    if f then
+      f.mine = mine[id]
+      out[#out + 1] = f
+    end
   end
   return out
 end

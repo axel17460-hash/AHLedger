@@ -20,6 +20,7 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 | `Core.lua` | Base `AHLedgerDB`, bus d'événements `ns.on` (les événements inconnus du client sont ignorés et notés), `/ahl …`, `ns.safe` (garde les erreurs dans `ns.errors`) |
 | `History.lua` | Historique journalier compact par objet : prix, stock, vendus, ambigus, valeur vendue, expirés ; série 48 h |
 | `Analysis.lua` | Stats par objet : prix réel, vendus/j, tendances, écoulement, net de commission et de dépôt, concurrence, signaux, score. Aussi Flips HV, achat PNJ → HV, artisanat, zones de farm |
+| `Rebound.lua` | Creux de prix et rebonds par objet (taux, délai médian, meilleur jour de la semaine), appris chaque jour et gardés sans purge ; servent aux flips « à stocker » |
 | `Scan.lua` | Scan complet (Auctionator, Retail ou Classic), comparaison avec le scan précédent, carnet d'ordres compact `db.book` |
 | `Vendor.lua`, `Farm.lua`, `Snipe.lua` | Prix des marchands, sessions `/ahl farm`, enchères sous le prix PNJ |
 | `Professions.lua` | Niveaux de métier, recettes relevées à l'ouverture des fenêtres de métier (Classic et Retail), table des cuirs pour le dépeçage |

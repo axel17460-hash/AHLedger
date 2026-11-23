@@ -73,22 +73,32 @@ local MODES = {
   flip = {
     title = "Flip HV",
     sort = "profit",
-    help = "Enchères sous le prix réel de vente (dernier scan) : achète jusqu'au prix indiqué puis remets en vente juste sous la prochaine enchère. Quantité limitée à 2 j de ventes. Clic = rechercher l'objet.",
+    help = "Achète jusqu'au prix indiqué. « Tout de suite » : remets en vente juste sous la prochaine enchère. « Stocker » : tout le marché est bas, garde-les jusqu'à ce que le prix remonte (délai et chance appris des creux passés ; bénéfice espéré). Clic = rechercher l'objet.",
     cols = {
       { "Objet", 160, function(e) return itemLabel(e.id, e.s) end, "name" },
       { "Qté", 45, function(e) return tostring(e.qty) end, "qty", "RIGHT" },
       { "Acheter jusqu'à/u", 95, function(e) return ns.money(e.maxBuy) end, "maxBuy", "RIGHT" },
       { "Coût total", 82, function(e) return ns.money(e.cost) end, "cost", "RIGHT" },
       { "Revente/u", 78, function(e) return ns.money(e.resale) end, "resale", "RIGHT" },
-      { "Bénéfice", 82, function(e) return "|cff40ff40" .. ns.money(e.profit) .. "|r" end, "profit", "RIGHT" },
+      -- à stocker : bénéfice espéré (« ~ »), pondéré par la chance que le prix remonte
+      { "Bénéfice", 82, function(e) return "|cff40ff40" .. (e.kind == "stock" and "~" or "") .. ns.money(e.profit) .. "|r" end, "profit", "RIGHT" },
       { "ROI", 45, function(e) return ("%.0f%%"):format(e.roi * 100) end, "roi", "RIGHT" },
-      { "Écoul. (j)", 55, function(e) return ("%.1f"):format(e.days) end, "days", "RIGHT" },
-      { "Écoulé", 44, function(e) return share(e.s.sellThrough) end, "sellThrough", "RIGHT" },
+      { "Délai (j)", 52, function(e) return ("%.1f"):format(e.days) end, "days", "RIGHT" },
+      { "Revendre", 130, function(e)
+          local w = ns.Analysis.FlipWhen(e)
+          if e.kind ~= "stock" then return "|cff40ff40" .. w .. "|r" end
+          return (e.known and "|cff66ccff" or "|cffff8040") .. w .. "|r"
+        end, "kind" },
     },
     rows = function() return ns.Analysis.Flips() end,
     onClick = function(e)
-      ns.Snipe.Search(e, ("Flip : %s — achète jusqu'à %s/u (%d u.), revends à %s/u."):format(
-        e.name or "?", ns.money(e.maxBuy), e.qty, ns.money(e.resale)))
+      if e.kind == "stock" then
+        ns.Snipe.Search(e, ("Flip à stocker : %s — achète jusqu'à %s/u (%d u.), garde-les et revends à %s/u quand le prix remonte (%s)."):format(
+          e.name or "?", ns.money(e.maxBuy), e.qty, ns.money(e.resale), ns.Analysis.FlipWhen(e)))
+      else
+        ns.Snipe.Search(e, ("Flip : %s — achète jusqu'à %s/u (%d u.), revends tout de suite à %s/u."):format(
+          e.name or "?", ns.money(e.maxBuy), e.qty, ns.money(e.resale)))
+      end
     end,
   },
   craft = {

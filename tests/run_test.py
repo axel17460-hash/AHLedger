@@ -354,6 +354,16 @@ with tempfile.TemporaryDirectory() as d:
     subprocess.run([sys.executable, str(tool), "sync", "--sv", str(sv), "--to", d, "--once"], check=True, stdout=subprocess.DEVNULL)
     assert (Path(d) / "rapport.md").read_text(encoding="utf-8") == brief.rstrip("\n")
     assert len(list((Path(d) / "historique").glob("rapport-*.md"))) == 1
+    # Plusieurs comptes Google : le lecteur qui a déjà un dossier AHLedger gagne, sinon le premier trouvé
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ahledger_tool", tool)
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    a, b = Path(d) / "compteA" / "My Drive", Path(d) / "compteB" / "My Drive"
+    a.mkdir(parents=True); b.mkdir(parents=True)
+    assert mod.find_drive_folder([str(Path(d) / "absent"), str(a), str(b)]) == str(a)
+    (b / "AHLedger").mkdir()
+    assert mod.find_drive_folder([str(a), str(b)]) == str(b)
+    assert mod.find_drive_folder([str(Path(d) / "absent")]) is None
 db.unlink(); sv.unlink()
 
 # Noms vides (API Retail, objet pas encore en cache) : jamais stockés, redemandés ensuite
@@ -578,6 +588,30 @@ assert any(x.startswith("Données : ") for x in tt), tt
 print("OK : tests PNJ → HV et tooltip")
 assert any(x.startswith("Vendre à l'HV") or x.startswith("HV ≈ PNJ") or x.startswith("Au PNJ") for x in tt[:4]), tt
 
+# Verdict du tooltip selon ton rôle : objet fabriqué avec bénéfice (vendeur) ou composant (acheteur)
+verdicts = lua.eval("""function(ns)
+  local A, P = ns.Analysis, ns.Prof
+  local realGet, realCrafts, realRecipes = A.Get, A.Crafts, P.Recipes
+  local function fake(id) return { id = id, netExp = 500, trend24 = -0.05, vsAvg = 0, signals = {} } end
+  A.Get = function(id) if id == 999101 or id == 999102 then return fake(id) end return realGet(id) end
+  P.Recipes = function() return { test = { [999101] = { n = "Lingot", r = { [999102] = 1 } } } } end
+  A.Crafts = function() return { { id = 999101, prof = "test", cost = 240, profit = 314, sellTo = "HV" } } end
+  local out = {}
+  for i, id in ipairs({ 999101, 999102 }) do
+    TT = {}
+    GameTooltip.GetItem = function() return 'x', '|Hitem:' .. id .. '::::|h' end
+    GameTooltip.scripts.OnTooltipSetItem(GameTooltip)
+    out[i] = table.concat(TT, "\\n")
+  end
+  A.Get, A.Crafts, P.Recipes = realGet, realCrafts, realRecipes
+  return out[1], out[2]
+end""")(ns)
+crafted, reagent = (strip(v) for v in verdicts)
+print("Verdict fabriqué :", [l for l in crafted.split("\n") if "baisse" in l])
+print("Verdict composant :", [l for l in reagent.split("\n") if "baisse" in l])
+assert "fabrique et vends tout de suite" in crafted and "ne pas stocker" not in crafted, crafted
+assert "attends pour acheter" in reagent and "vendre vite" not in reagent, reagent
+
 # HV ou PNJ : seuils ±10 %, et pastilles sur les cases de Daylight UI tant que l'HV est ouverte
 cmp = lua.eval("""function(ns)
   local A = ns.Analysis
@@ -625,3 +659,112 @@ assert cmp[:5] == ("ah", "same", "same", "vendor", "ah"), cmp
 assert cmp[6] is True and cmp[7] == "bagslot", cmp
 assert cmp[8] is False and cmp[9] is True and cmp[10] == 1 and cmp[11] is True and cmp[12] is True, cmp
 print("OK : HV ou PNJ, pastilles des sacs")
+
+# Flip HV : revendre tout de suite ou stocker ? Creux et rebonds appris de l'historique,
+# reventes réelles rapprochées des achats (courriers d'HV)
+rb = lua.eval("""function(ns)
+  local R, A = ns.Rebound, ns.Analysis
+  -- série : prix habituel 100, creux à 80 le jour 11, remonté à 97 le jour 13 ;
+  -- puis creux à 70 le jour 20 qui ne remonte jamais (jours 20 à 40)
+  local series = {}
+  for d = 1, 19 do series[d] = 100 end
+  series[11], series[12], series[13] = 80, 85, 97
+  for d = 20, 40 do series[d] = 70 end
+  local ev, open = R.Events(series, 40)
+  local e1, e2 = ev[1], ev[2]
+  -- comptage persistant : une seule fois, même si on recalcule le lendemain
+  local db = { hist = { [999002] = {} }, days = {} }
+  local saved = R.Series
+  R.Series = function() return series end
+  R.Update(db, 41); R.Update(db, 41); R.Update(db, 42)
+  R.Series = saved
+  local g = R.Get(db, 999002)
+  -- flips : carnet entièrement sous le prix habituel (marché bas) ; rebonds inconnus puis connus
+  local s = { id = 999002, name = "Test", realPrice = 1000, avg7 = 1000, perDay = 40, deposit = 0, sellThrough = 0.9 }
+  local low = { levels = { { 500, 30 }, { 520, 200 } } }
+  local unknown = { ref = 1000, n = 0, ok = 0, rate = 0.5, known = false }
+  local known = { ref = 1000, n = 6, ok = 5, rate = 6 / 8, wait = 3, slow = 5, known = true }
+  local now0 = A.FlipFor(s, low, false)
+  local fU = A.FlipFor(s, low, unknown)
+  local fK = A.FlipFor(s, low, known)
+  s.trend = -0.05
+  local fDown = A.FlipFor(s, low, unknown)
+  local fDownK = A.FlipFor(s, low, known)
+  s.trend = nil
+  -- un seul vendeur brade, le reste du carnet est au prix habituel : tout de suite
+  local fNow = A.FlipFor(s, { levels = { { 500, 30 }, { 1000, 200 } } }, known)
+  -- reventes réelles : 10 achetés à 50 le jour 0, 4 + 6 revendus 2 et 4 jours plus tard
+  local ldb = ns.Ledger.DB()
+  local savedL = ldb.ledger
+  local t0 = 1000000
+  ldb.ledger = {
+    { k = "bought", id = 999002, c = 10, g = 500, t = t0 },
+    { k = "sold", id = 999002, c = 4, g = 400, cut = 20, t = t0 + 2 * 86400 },
+    { k = "sold", id = 999002, c = 6, g = 600, cut = 30, t = t0 + 4 * 86400 },
+    { k = "sold", id = 999003, c = 3, g = 300, t = t0 },
+  }
+  local h = ns.Ledger.Holds()
+  ldb.ledger = savedL
+  return e1.ok, e1.wait, e1.start, e2.ok, e2.start, open, g.n, g.ok, g.wait, g.known,
+         now0, fU.kind, fU.qty, fU.resale, fK.qty, A.FlipWhen(fK), fK.profit < fK.ifUp, fK.profit > fK.ifDown,
+         fDown, fDownK and fDownK.kind, fNow.kind, A.FlipWhen(fNow),
+         h[999002].units, h[999002].days, h[999002].profit, h[999003]
+end""")(ns)
+print("Rebonds / flips à stocker :", rb)
+assert rb[0] is True and rb[1] == 2 and rb[2] == 11, rb          # creux du jour 11 remonté en 2 j
+assert rb[3] is False and rb[4] == 20 and rb[5] is None, rb      # creux du jour 20 raté après 14 j
+assert rb[6] == 2 and rb[7] == 1 and rb[8] == 2 and rb[9] is False, rb  # compté une seule fois
+assert rb[10] is None, rb                                        # rien à revendre tout de suite
+assert rb[11] == "stock" and rb[12] == 20 and abs(rb[13] - 950) < 1e-6, rb  # inconnu : demi-journée de ventes
+assert rb[14] == 80 and rb[15] == "stocker ~3 j (75%)" and rb[16] and rb[17], rb
+assert rb[18] is None and rb[19] == "stock", rb                  # marché en baisse : seulement si l'objet remonte
+assert rb[20] == "now" and rb[21] == "tout de suite", rb
+assert rb[22] == 10 and abs(rb[23] - 3.2) < 1e-9 and abs(rb[24] - 45) < 1e-9 and rb[25] is None, rb
+
+# Meilleur jour de la semaine : prix +10 % un jour sur 7, sur 5 semaines
+wd = lua.eval("""function(ns)
+  local series, base = {}, 20000
+  local target
+  for d = base, base + 34 do
+    local w = tonumber(date("%w", d * 86400 + 43200))
+    target = target or w
+    series[d] = (w == target) and 110 or 100
+  end
+  local r = ns.Rebound.Weekday(series)
+  return r and r.day == target, r and r.name, r and r.gain > 0.05
+end""")(ns)
+print("Meilleur jour :", wd)
+assert wd[0] is True and wd[2] is True, wd
+print("OK : flips tout de suite / à stocker, rebonds, reventes réelles")
+
+# Affichage d'un flip à stocker : infobulle et rapport
+disp = lua.eval("""function(ns)
+  local A = ns.Analysis
+  local real = A.FlipFor
+  A.FlipFor = function(s, book)
+    if s.id ~= 4306 then return nil end
+    return { kind = "stock", id = 4306, s = s, name = s.name, qty = 12, cost = 6000, maxBuy = 500, resale = 950,
+             resaleNow = 520, ifUp = 5400, ifDown = -300, profit = 3900, roi = 0.65, rate = 0.75, wait = 3, slow = 5,
+             events = 6, recovered = 5, known = true, weekday = { name = "mardi", gain = 0.08 }, days = 3.3 }
+  end
+  local db = ns.realmDB()
+  db.book = db.book or {}
+  local savedBook = db.book[4306]
+  db.book[4306] = "2,500|500:12 950:40"
+  advance(10)
+  TT = {}
+  GameTooltip.GetItem = function() return 'Silk', '|Hitem:4306::::|h' end
+  GameTooltip.scripts.OnTooltipSetItem(GameTooltip)
+  local text = ns.Export.Build()
+  db.book[4306] = savedBook
+  A.FlipFor = real
+  return text
+end""")(ns)
+tt = [strip(re.sub(r"\|T[^|]*\|t", "", x)) for x in lua.eval("TT").values()]
+print("\n".join(x for x in tt if "stock" in x or "creux" in x or "jour" in x))
+assert any(x.startswith("Flip à stocker : acheter 12") for x in tt), tt
+assert any("5 creux sur 6 remontés, en ~3 j" in x for x in tt), tt
+assert any("Meilleur jour pour vendre : mardi" in x for x in tt), tt
+d = strip(disp)
+assert "[à stocker]" in d and "5 creux sur 6 remontés" in d and "meilleur jour de vente : mardi" in d, d
+print("OK : affichage des flips à stocker")
