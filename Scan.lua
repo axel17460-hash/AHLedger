@@ -181,6 +181,35 @@ function Scan.PackItems(packed)
   return table.concat(parts, ";")
 end
 
+-- Carnet d'ordres compact : "vendeurs,partTop‰|prix:qté;prix:qté;…" (prix unitaires croissants,
+-- quantités cumulées par prix, BOOK_LEVELS niveaux au plus)
+Scan.BOOK_LEVELS = 15
+function Scan.PackBook(prices, sellers, topPermille)
+  local levels = {}
+  for _, e in ipairs(prices) do
+    local last = levels[#levels]
+    if last and last[1] == e[1] then
+      last[2] = last[2] + e[2]
+    elseif #levels < Scan.BOOK_LEVELS then
+      levels[#levels + 1] = { e[1], e[2] }
+    else
+      break
+    end
+  end
+  local parts = {}
+  for i, l in ipairs(levels) do parts[i] = l[1] .. ":" .. l[2] end
+  return sellers .. "," .. topPermille .. "|" .. table.concat(parts, ";")
+end
+
+function Scan.UnpackBook(str)
+  if not str then return nil end
+  local sellers, top, rest = str:match("^(%d+),(%d+)|(.*)$")
+  if not sellers then return nil end
+  local levels = {}
+  for p, q in rest:gmatch("(%d+):(%d+)") do levels[#levels + 1] = { tonumber(p), tonumber(q) } end
+  return { sellers = tonumber(sellers), top = tonumber(top) / 1000, levels = levels }
+end
+
 function Scan.RecentlyDone()
   local db = ns.realmDB()
   return db.lastScanTime and time() - db.lastScanTime < 120
@@ -344,6 +373,7 @@ function Scan.Finish()
   -- Format compact par objet : "nb,qté,min,p25,médiane,vendu,expiré,ambigu,posté,valeurVendue"
   local packed, stats = {}, {}
   db.lastMin = {} -- prix d'achat le plus bas à l'unité, au dernier scan
+  db.book = {}    -- carnet d'ordres du dernier scan (onglet Flip HV, concurrence)
   local ids = {}
   for id in pairs(items) do ids[id] = true end
   if diff then for id in pairs(diff) do ids[id] = true end end
@@ -361,6 +391,7 @@ function Scan.Finish()
       sellers = sellers + 1
       if q > top then top = q end
     end
+    if items[id] and it.q > 0 then db.book[id] = Scan.PackBook(it.prices, sellers, math.floor(top * 1000 / it.q)) end
     packed[id] = table.concat({
       it.n, it.q, minP,
       weightedPercentile(it.prices, 0.25),

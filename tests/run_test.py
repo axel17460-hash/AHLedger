@@ -33,6 +33,7 @@ simHour(); buildAuctions()
 table.insert(AUCTIONS, { id = 2592, count = 20, buyout = 400, owner = "Radin", tl = 4 })              -- 20c/u, PNJ 33c/u
 table.insert(AUCTIONS, { id = 2592, count = 5, buyout = 0, minBid = 50, owner = "Pressé", tl = 1 })   -- enchère seule
 table.insert(AUCTIONS, { id = 4338, count = 20, buyout = 30000, owner = "Normal", tl = 4 })           -- pas une affaire
+table.insert(AUCTIONS, { id = 4306, count = 20, buyout = 10000, owner = "Bradeur", tl = 4 })          -- soie à 5 pa/u : à flipper
 SlashCmdList.AHLEDGER("scan"); runTimers()
 fire("MERCHANT_SHOW")
 SlashCmdList.AHLEDGER("farm start")
@@ -50,13 +51,49 @@ def show_ui(mode):
     print(f"--- Onglet {mode} ---")
     for row in ns.UI.rows.values():
         if row.shown:
-            cells = [strip(row.cells[i].text) for i in range(1, 9) if row.cells[i].text]
+            cells = [strip(row.cells[i].text) for i in range(1, 10) if row.cells[i].text]
             print(" | ".join(cells))
     print(strip(ns.UI.footer.text), "\n")
 
+# Métiers : niveaux (API Classic) et recette relevée à l'ouverture de la fenêtre de métier
+lua.execute("""
+local SKILLS = { { "Professions", true, true, 0, 0, 0, 0 }, { "Skinning", false, false, 253, 0, 0, 300 },
+                 { "First Aid", false, false, 220, 0, 0, 225 } }
+GetNumSkillLines = function() return #SKILLS end
+GetSkillLineInfo = function(i) return unpack(SKILLS[i]) end
+GetTradeSkillLine = function() return "First Aid", 220, 225 end
+GetNumTradeSkills = function() return 2 end
+GetTradeSkillInfo = function(i) if i == 1 then return "Potions", "header" end return "Healing Potion", "optimal" end
+GetTradeSkillItemLink = function() return "|Hitem:929::::|h" end
+GetTradeSkillNumMade = function() return 1, 1 end
+GetTradeSkillNumReagents = function() return 2 end
+GetTradeSkillReagentInfo = function(_, j) if j == 1 then return "Silk Cloth", nil, 2 end return "Empty Vial", nil, 1 end
+GetTradeSkillReagentItemLink = function(_, j) return j == 1 and "|Hitem:4306::::|h" or "|Hitem:3371::::|h" end
+fire("SKILL_LINES_CHANGED"); fire("TRADE_SKILL_SHOW"); fire("TRADE_SKILL_UPDATE"); runTimers()
+""")
+rel = ns.Prof.Related()
+assert rel[4304] == "dépeçage" and rel[15417] is None, "dépeçage 253 : cuir épais oui, cuir de diablosaure non"
+assert rel[929] == "artisanat" and rel[4306] == "composant"
+assert ns.Prof.MaxSkinLevel(253) == 50
+
 lua.execute("SlashCmdList.AHLEDGER('')")  # ouvre la fenêtre
-for mode in ("market", "vendor", "snipe", "farm"):
+for mode in ("market", "flip", "craft", "vendor", "snipe", "farm"):
     show_ui(mode)
+
+# Flip HV : la pile bradée de soie doit ressortir, achetée jusqu'à 5 pa/u
+flips = {f.id: f for f in ns.Analysis.Flips().values()}
+silkFlip = flips.get(4306)
+print("Flip soie :", silkFlip and (silkFlip.qty, silkFlip.maxBuy, round(silkFlip.resale), round(silkFlip.profit)))
+assert silkFlip and silkFlip.maxBuy >= 500 and silkFlip.qty >= 20 and silkFlip.resale > 900
+assert 4338 not in flips  # tisse-mage en afflux, pas de pile sous le prix
+# Artisanat : coût = 2 soies (HV) + 1 fiole (PNJ 20c)
+craft = {c.id: c for c in ns.Analysis.Crafts().values()}[929]
+silkMin = ns.Analysis.Get(4306).minNow
+print("Artisanat potion : coût", craft.cost, "valeur", craft.value, "bénéfice", craft.profit)
+assert craft.cost == 2 * silkMin + 20 and craft.diff == "optimal"
+# Concurrence et écoulement exposés dans les stats
+silk = ns.Analysis.Get(4306)
+assert silk.sellers and silk.sellers >= 2 and silk.sellThrough and 0 < silk.sellThrough <= 1
 
 # Attendus : soie en hausse/pénurie, tisse-mage en baisse/afflux, fioles rentables chez le PNJ
 stats = ns.Analysis.All().byId

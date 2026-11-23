@@ -4,7 +4,7 @@ local _, ns = ...
 local UI = { mode = "market", offset = 0, cat = 1, liquidOnly = true, sortDesc = true }
 ns.UI = UI
 
-local ROWS, ROW_H, WIDTH, MAX_COLS, GAP = 16, 20, 820, 8, 6
+local ROWS, ROW_H, WIDTH, MAX_COLS, GAP = 16, 20, 820, 9, 5
 
 local CATS = {
   { "Tout", nil },
@@ -12,7 +12,13 @@ local CATS = {
   { "Consommables", { [0] = true } },
   { "Recettes", { [9] = true } },
   { "Équipement", { [2] = true, [4] = true } },
+  { "Mes métiers", "prof" }, -- ce que tu récoltes, fabriques, et leurs composants
 }
+
+local DIFF = { optimal = "|cffff8040orange|r", medium = "|cffffff00jaune|r", easy = "|cff40c040vert|r",
+               trivial = "|cff808080gris|r" }
+
+local function share(v) return v and ("%.0f%%"):format(v * 100) or "|cff808080—|r" end
 
 local function itemLabel(id, s)
   local meta = AHLedgerDB.items[id]
@@ -29,26 +35,66 @@ local MODES = {
   market = {
     title = "Marché",
     sort = "score",
-    help = "Classement par score « à farmer » : or échangé par jour × tendance du prix × signaux de stock.",
+    help = "Score « à farmer » : or/jour (net de commission et des dépôts perdus sur les invendus) × tendance × signaux. Stock (j) = jours de ventes déjà en rayon ; Écoulé = part des enchères vendues avant d'expirer.",
     cols = {
-      { "Objet", 180, function(e) return itemLabel(e.id, e) end, "name" },
-      { "Prix/u", 85, function(e) return ns.money(e.price) end, "price", "RIGHT" },
-      { "Achat min/u", 85, function(e) return ns.money(e.minNow) end, "minNow", "RIGHT" },
-      { "Tend./j", 58, function(e) return ns.pct(e.trend) end, "trend", "RIGHT" },
-      { "Vendus/j", 58, function(e) return num(e.perDay) end, "perDay", "RIGHT" },
-      { "Stock", 48, function(e) return num(e.stock) end, "stock", "RIGHT" },
-      { "Or/jour", 90, function(e) return ns.money(e.gpd) end, "gpd", "RIGHT" },
-      { "Signaux", 130, function(e) return table.concat(e.signals, " · ") end, "score" },
+      { "Objet", 160, function(e) return itemLabel(e.id, e) end, "name" },
+      { "Prix/u", 78, function(e) return ns.money(e.price) end, "price", "RIGHT" },
+      { "Achat min/u", 78, function(e) return ns.money(e.minNow) end, "minNow", "RIGHT" },
+      { "Tend./j", 52, function(e) return ns.pct(e.trend) end, "trend", "RIGHT" },
+      { "Vendus/j", 52, function(e) return num(e.perDay) end, "perDay", "RIGHT" },
+      { "Stock (j)", 50, function(e) return num(e.stockDays, "%.1f") end, "stockDays", "RIGHT" },
+      { "Écoulé", 44, function(e) return share(e.sellThrough) end, "sellThrough", "RIGHT" },
+      { "Or/jour", 82, function(e) return ns.money(e.gpd) end, "gpd", "RIGHT" },
+      { "Signaux", 140, function(e) return table.concat(e.signals, " · ") end, "score" },
     },
     rows = function()
       local out, filter = {}, CATS[UI.cat][2]
+      local rel = filter == "prof" and ns.Prof.Related() or nil
       for _, s in ipairs(ns.Analysis.All().list) do
-        local okCat = not filter or (s.class and filter[s.class])
+        local okCat = not filter or (rel and rel[s.id]) or (not rel and s.class and filter[s.class])
         local okLiq = not UI.liquidOnly or (s.perDay and s.perDay >= 1)
         if okCat and okLiq then out[#out + 1] = s end
       end
       return out
     end,
+  },
+  flip = {
+    title = "Flip HV",
+    sort = "profit",
+    help = "Enchères sous le prix réel de vente (dernier scan) : achète jusqu'au prix indiqué puis remets en vente juste sous la prochaine enchère. Quantité limitée à 2 j de ventes. Clic = rechercher l'objet.",
+    cols = {
+      { "Objet", 160, function(e) return itemLabel(e.id, e.s) end, "name" },
+      { "Qté", 45, function(e) return tostring(e.qty) end, "qty", "RIGHT" },
+      { "Acheter jusqu'à/u", 95, function(e) return ns.money(e.maxBuy) end, "maxBuy", "RIGHT" },
+      { "Coût total", 82, function(e) return ns.money(e.cost) end, "cost", "RIGHT" },
+      { "Revente/u", 78, function(e) return ns.money(e.resale) end, "resale", "RIGHT" },
+      { "Bénéfice", 82, function(e) return "|cff40ff40" .. ns.money(e.profit) .. "|r" end, "profit", "RIGHT" },
+      { "ROI", 45, function(e) return ("%.0f%%"):format(e.roi * 100) end, "roi", "RIGHT" },
+      { "Écoul. (j)", 55, function(e) return ("%.1f"):format(e.days) end, "days", "RIGHT" },
+      { "Écoulé", 44, function(e) return share(e.s.sellThrough) end, "sellThrough", "RIGHT" },
+    },
+    rows = function() return ns.Analysis.Flips() end,
+    onClick = function(e)
+      ns.Snipe.Search(e, ("Flip : %s — achète jusqu'à %s/u (%d u.), revends à %s/u."):format(
+        e.name or "?", ns.money(e.maxBuy), e.qty, ns.money(e.resale)))
+    end,
+  },
+  craft = {
+    title = "Artisanat",
+    sort = "profit",
+    help = "Tes recettes (ouvre chaque fenêtre de métier une fois). Coût = composants au moins cher entre PNJ et HV ; valeur = HV nette ou PNJ. Orange/jaune = gain de compétence.",
+    cols = {
+      { "Recette", 165, function(e) return itemLabel(e.id, e.s) end, "name" },
+      { "Métier", 62, function(e) return ns.Prof.LABEL[e.prof] or e.prof end, "prof" },
+      { "Coût", 78, function(e) return e.cost and ns.money(e.cost) or ("|cff808080%d prix ?|r"):format(e.missing) end, "cost", "RIGHT" },
+      { "Valeur", 78, function(e) return ns.money(math.max(e.value or 0, e.vendorValue)) end, "value", "RIGHT" },
+      { "Bénéfice", 78, function(e) return e.profit and ((e.profit >= 0 and "|cff40ff40" or "|cffff5050") .. ns.money(e.profit) .. "|r") or "-" end, "profit", "RIGHT" },
+      { "ROI", 45, function(e) return e.roi and ("%.0f%%"):format(e.roi * 100) or "-" end, "roi", "RIGHT" },
+      { "Vendre", 42, function(e) return e.sellTo or "-" end, "sellTo" },
+      { "Vendus/j", 52, function(e) return num(e.perDay) end, "perDay", "RIGHT" },
+      { "Niveau", 55, function(e) return DIFF[e.diff] or "-" end, "diff" },
+    },
+    rows = function() return ns.Analysis.Crafts() end,
   },
   vendor = {
     title = "Achat PNJ",
@@ -149,27 +195,27 @@ function UI.Build()
   -- Onglets
   local x = 12
   UI.modeButtons = {}
-  for _, key in ipairs({ "market", "vendor", "snipe", "farm" }) do
+  for _, key in ipairs({ "market", "flip", "craft", "vendor", "snipe", "farm" }) do
     local b = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    b:SetSize(95, 22)
+    b:SetSize(84, 22)
     b:SetPoint("TOPLEFT", x, -30)
     b:SetText(MODES[key].title)
     b:SetScript("OnClick", function() UI.SetMode(key) end)
     UI.modeButtons[key] = b
-    x = x + 98
+    x = x + 86
   end
 
   -- Filtres (onglet Marché)
   UI.catButton = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  UI.catButton:SetSize(120, 22)
-  UI.catButton:SetPoint("TOPRIGHT", -150, -30)
+  UI.catButton:SetSize(140, 22)
+  UI.catButton:SetPoint("TOPRIGHT", -134, -30)
   UI.catButton:SetScript("OnClick", function()
     UI.cat = UI.cat % #CATS + 1
     UI.offset = 0
     UI.Refresh()
   end)
   UI.liqButton = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  UI.liqButton:SetSize(130, 22)
+  UI.liqButton:SetSize(118, 22)
   UI.liqButton:SetPoint("TOPRIGHT", -14, -30)
   UI.liqButton:SetScript("OnClick", function()
     UI.liquidOnly = not UI.liquidOnly
@@ -294,7 +340,7 @@ function UI.Refresh()
   if not UI.frame then return end
   local m = MODES[UI.mode]
   UI.catButton:SetText("Catégorie : " .. CATS[UI.cat][1])
-  UI.liqButton:SetText(UI.liquidOnly and "Liquides seulement" or "Tous les volumes")
+  UI.liqButton:SetText(UI.liquidOnly and "Liquides seuls." or "Tous volumes")
   UI.title:SetText("AHLedger — " .. ns.realmKey())
 
   local data = m.rows()

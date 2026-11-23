@@ -58,7 +58,7 @@ function Snipe.FromScan(rows, now)
 end
 
 -- Lance une recherche normale pour afficher l'objet dans l'onglet "Parcourir" de Blizzard
-function Snipe.Search(o)
+function Snipe.Search(o, msg)
   if not ns.isAHOpen() then
     ns.print("Ouvre l'HV pour rechercher " .. (o.name or "l'objet") .. ".")
     return
@@ -66,7 +66,7 @@ function Snipe.Search(o)
   -- Client moderne + Auctionator : on passe par son API publique de recherche
   if not QueryAuctionItems and Auctionator and Auctionator.API and Auctionator.API.v1 and Auctionator.API.v1.MultiSearch then
     Auctionator.API.v1.MultiSearch("AHLedger", { o.name or "" })
-    ns.print(("Recherche Auctionator : %s — pile de %d à %s (revente PNJ %s)."):format(
+    ns.print(msg or ("Recherche Auctionator : %s — pile de %d à %s (revente PNJ %s)."):format(
       o.name or "?", o.count, ns.money(o.cost), ns.money(o.value)))
     return
   end
@@ -81,7 +81,7 @@ function Snipe.Search(o)
   if AuctionFrameTab1 and AuctionFrameTab_OnClick then AuctionFrameTab_OnClick(AuctionFrameTab1) end
   if BrowseName then BrowseName:SetText(o.name or "") end
   QueryAuctionItems(o.name or "", nil, nil, 0, false, -1, false, true, nil)
-  ns.print(("Recherche : %s — cherche la pile de %d à %s (revente PNJ %s)."):format(
+  ns.print(msg or ("Recherche : %s — cherche la pile de %d à %s (revente PNJ %s)."):format(
     o.name or "?", o.count, ns.money(o.cost), ns.money(o.value)))
 end
 

@@ -46,6 +46,21 @@ local function addLines(tooltip, id)
     tooltip:AddDoubleLine("Vendus /jour (estim.)", ("%.0f  (stock %.0f)"):format(s.perDay, s.stock or 0),
       0.8, 0.8, 0.8, 1, 1, 1)
   end
+  if s.sellThrough or s.sellers then
+    local parts = {}
+    if s.sellThrough then parts[#parts + 1] = ("%.0f%% vendues"):format(s.sellThrough * 100) end
+    if s.stockDays then parts[#parts + 1] = ("%.1f j de stock"):format(s.stockDays) end
+    if s.sellers then parts[#parts + 1] = ("%d vendeurs (top %.0f%%)"):format(s.sellers, (s.topShare or 0) * 100) end
+    tooltip:AddDoubleLine("Écoulement", table.concat(parts, " · "), 0.8, 0.8, 0.8, 1, 1, 1)
+  end
+  if s.netExp then
+    tooltip:AddDoubleLine("Net /u (commission, dépôts)", ns.money(s.netExp), 0.8, 0.8, 0.8, 1, 1, 1)
+  end
+  local rel = ns.Prof and ns.Prof.Related()[id]
+  if rel then
+    local label = { ["dépeçage"] = "Tu peux le dépecer", artisanat = "Tu sais le fabriquer", composant = "Composant d'une de tes recettes" }
+    tooltip:AddLine(label[rel] or rel, 0.6, 0.9, 1)
+  end
   local v = verdict(s)
   if v then tooltip:AddLine(v, 1, 1, 1, true) end
   local sig = {}

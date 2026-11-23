@@ -1,4 +1,4 @@
-# AHLedger (v0.2)
+# AHLedger (v0.5)
 
 Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l'hôtel des ventes et suit les hausses et baisses de prix, pour savoir quoi farmer avant tout le monde. L'analyse se fait entièrement en jeu.
 
@@ -10,6 +10,8 @@ Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l
 - À l'HV, deux boutons s'ajoutent à droite de la fenêtre : **AHLedger : scan** et **AHLedger : analyse**. Lance un scan toutes les 15 à 60 min pendant que tu joues : plus il y a de scans rapprochés, meilleures sont les estimations de volume.
 - `/ahl` ouvre la fenêtre d'analyse :
   - **Marché** : classement par score « à farmer », avec prix, tendance/jour, vendus/jour, stock, or/jour et signaux. Filtres par catégorie et option pour n'afficher que les marchés liquides. Clique sur un en-tête pour trier.
+  - **Flip HV** : enchères affichées sous le prix réel de vente. Pour chaque objet : jusqu'à quel prix unitaire acheter, combien (au plus 2 jours de ventes), à quel prix revendre (juste sous la prochaine enchère restante, sans dépasser le prix réel de vente) et le bénéfice attendu, net de la commission et des dépôts perdus sur les invendus. Seuils : ROI ≥ 15 % et bénéfice ≥ 20 pa. Clic = rechercher l'objet.
+  - **Artisanat** : tes recettes, relevées quand tu ouvres une fenêtre de métier (ouvre chacun de tes métiers une fois). Coût des composants au moins cher entre PNJ (marchands déjà visités) et HV, valeur à l'HV ou au PNJ, bénéfice, et couleur de la recette (orange/jaune = gain de compétence).
   - **Achat PNJ** : objets achetés chez des marchands que tu as déjà ouverts et revendables à profit (commission déduite).
   - **Farm** : tes sessions `/ahl farm start` / `/ahl farm stop`, regroupées par zone et valorisées en or/h aux prix actuels.
   - **Revente PNJ** : les enchères affichées moins cher que ce que le marchand en donne, repérées au dernier scan. Il y a deux types : achat immédiat, et enchère qui se termine dans moins de 2 h. Clique sur une ligne pour lancer la recherche de l'objet dans l'onglet « Parcourir » ; l'achat reste manuel.
@@ -28,10 +30,21 @@ Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l
   - `afflux` : le stock a augmenté de plus de 50 %. Le marché risque de saturer.
   - `PNJ>HV` : l'objet rapporte plus vendu au PNJ qu'à l'HV.
   - `peu de données` : moins de 6 h de marché observées.
-- **Score « à farmer »** : or/jour × (1 + 3 × tendance, borné entre 0,5 et 1,5) × bonus de signaux (pénurie ×1,2, demande ×1,1, afflux ×0,8).
+  - `stock lourd` : plus de 7 jours de ventes déjà en rayon. Ta pile attendra derrière les autres.
+  - `dominé` : un seul vendeur détient au moins 60 % du stock. Attends-toi à te faire sous-coter.
+  - `invendus` : moins de 40 % des enchères partent avant d'expirer.
+  - `dépeçage` : ton niveau de dépeçage suffit pour récolter cet objet toi-même.
+- **Écoulé** : part des enchères vendues avant d'expirer sur 7 jours (avec un a priori de 2 sur 3 tant qu'il y a peu de données).
+- **Or/jour** : (prix − commission − dépôts perdus sur les remises en vente) × vendus/jour. Le dépôt est estimé à 15 % du prix PNJ par mise en vente (`Analysis.DEPOSIT_RATE`, à vérifier sur Forever).
+- **Score « à farmer »** : or/jour × (1 + 3 × tendance, borné entre 0,5 et 1,5) × signaux (pénurie ×1,2, demande ×1,1, afflux ×0,8, stock lourd ×0,75, dominé ×0,85).
+
+## Métiers
+- `/ahl metiers` affiche tes niveaux, le niveau maximal des monstres que tu peux dépecer, et les métiers dont les recettes ne sont pas encore relevées.
+- La catégorie **Mes métiers** de l'onglet Marché ne montre que ce qui te concerne : ce que tu peux dépecer, ce que tu fabriques et leurs composants.
+- Les seuils de dépeçage des cuirs et écailles (`Professions.lua`) sont approximatifs.
 
 ## Commandes
-`/ahl` · `/ahl scan` · `/ahl status` · `/ahl farm start|stop` · `/ahl raw on|off` (snapshots bruts pour l'export Python) · `/ahl prune <n>`
+`/ahl` · `/ahl scan` · `/ahl status` · `/ahl metiers` · `/ahl farm start|stop` · `/ahl raw on|off` (snapshots bruts pour l'export Python) · `/ahl prune <n>`
 
 ## Export Python (optionnel)
 ```
