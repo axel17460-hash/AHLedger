@@ -854,3 +854,62 @@ assert action == "Fabriquer", action
 assert "Fabrique-le plutôt : Bracelet" in tip, tip
 assert none is None and weakGain < 0, up
 print("OK : fabriquer plutôt que vendre le composant")
+
+# Fenêtre : position dans la liste au pied de page, tableau vide expliqué, flèche de tri
+ui = lua.eval("""function(ns)
+  local UI = ns.UI
+  UI.liquidOnly, UI.cat = false, 1
+  UI.content.GetHeight = function() return 78 + 36 + 5 * 20 end -- 4 lignes visibles
+  UI.SetMode("market")
+  local footer, emptyHidden = UI.footer.text, not UI.empty.shown
+  local realFlips = ns.Analysis.Flips
+  ns.Analysis.Flips = function() return {} end
+  UI.SetMode("flip")
+  local empty, emptyShown = UI.empty.text, UI.empty.shown
+  ns.Analysis.Flips = realFlips
+  UI.content.GetHeight = nil
+  UI.liquidOnly = true
+  UI.SetMode("market")
+  return footer, emptyHidden, empty, emptyShown, UI.headers[9].arrow.shown, UI.helpText ~= nil
+end""")(ns)
+footer, emptyHidden, empty, emptyShown, sortArrow, hasHelp = ui
+print("Pied de page :", strip(footer)); print("Vide :", empty)
+assert "lignes 1–4 sur" in str(footer), footer
+assert emptyHidden and emptyShown and "flip" in str(empty), ui
+assert sortArrow and hasHelp, ui
+print("OK : fenêtre (défilement, tableau vide, tri)")
+
+# Bouton de la minicarte : affiché par défaut, au bord de la carte (carrée ou ronde), masquable
+mm = lua.eval("""function(ns)
+  Minimap = mock()
+  Minimap.GetWidth = function() return 140 end
+  Minimap.GetHeight = function() return 140 end
+  Minimap.GetFrameLevel = function() return 2 end
+  local MM = ns.MinimapButton
+  MM.button = nil
+  fire("PLAYER_LOGIN")
+  local b = MM.button
+  local pos = {}
+  b.SetPoint = function(_, _, _, _, x, y) pos.x, pos.y = x, y end
+  b.GetWidth = function() return 31 end
+  GetMinimapShape = function() return "SQUARE" end
+  MM.Place(180)
+  local sx, sy = pos.x, pos.y
+  GetMinimapShape = nil
+  MM.Place(90)
+  local rx, ry = pos.x, pos.y
+  local shown = b.shown
+  ns.Options.Set("minimap", false)
+  local hidden = not b.shown
+  ns.Options.Set("minimap", true)
+  local back = b.shown
+  AHLedgerDB.opt.minimap = nil
+  Minimap, MM.button = nil, nil
+  return shown, hidden, back, sx, sy, rx, ry
+end""")(ns)
+shown, hidden, back, sx, sy, rx, ry = mm
+print("Minicarte :", mm)
+assert shown and hidden and back, mm
+assert abs(sx + (70 - 17.5)) < 0.01 and abs(sy) < 0.01, mm   # carrée : bord gauche, à l'intérieur
+assert abs(rx) < 0.01 and abs(ry - 80) < 0.01, mm           # ronde : sur l'anneau, en haut
+print("OK : bouton de la minicarte")

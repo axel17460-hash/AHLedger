@@ -279,6 +279,7 @@ function Scan.Abort(reason)
   ns.off("AUCTION_ITEM_LIST_UPDATE", Scan.OnListUpdate)
   Scan.rows, Scan.pending = nil, nil
   ns.print("Scan interrompu : " .. reason)
+  if ns.UI then ns.UI.OnData() end -- le bouton « Scan en cours… » redevient « Scanner l'HV »
 end
 
 -- Construit l'agrégat par objet + les signatures d'enchères pour le diff

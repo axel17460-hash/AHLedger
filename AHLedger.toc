@@ -30,3 +30,4 @@ Bridge.lua
 Tooltip.lua
 BagMarks.lua
 UI.lua
+MinimapButton.lua

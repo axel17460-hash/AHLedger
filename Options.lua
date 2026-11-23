@@ -5,7 +5,8 @@ local Options = {}
 ns.Options = Options
 
 -- ttAway : infobulle hors de l'HV ; ttAH : infobulle à l'HV ; ttShift : Maj affiche le détail complet
-local DEFAULTS = { ttAway = "compact", ttAH = "full", ttShift = true, bagMarks = "always" }
+-- minimap : bouton sur la minicarte ; mmAngle : sa position autour de la carte (degrés)
+local DEFAULTS = { ttAway = "compact", ttAH = "full", ttShift = true, bagMarks = "always", minimap = true }
 
 function Options.Get(key)
   local o = AHLedgerDB and AHLedgerDB.opt
@@ -30,6 +31,7 @@ function Options.Set(key, value)
   end
   ns.dataVersion = (ns.dataVersion or 0) + 1 -- vide le cache des infobulles
   if key == "bagMarks" and ns.BagMarks then ns.safe("pastilles", ns.BagMarks.Refresh, true) end
+  if key == "minimap" and ns.MinimapButton then ns.safe("bouton minicarte", ns.MinimapButton.Sync) end
   for _, p in ipairs(panels) do p.Sync() end
 end
 
@@ -95,6 +97,8 @@ local function build(parent, top)
   })
   y = y - 6
   title("Divers")
+  check("Bouton sur la minicarte", function() return Options.Get("minimap") end,
+    function(v) Options.Set("minimap", v) end)
   check("Garder les scans bruts pour l'export Python", function() return Options.Get("keepRaw") end,
     function(v) Options.Set("keepRaw", v) end)
 

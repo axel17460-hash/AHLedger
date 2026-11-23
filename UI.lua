@@ -22,6 +22,21 @@ local DIFF = { optimal = "|cffff8040orange|r", medium = "|cffffff00jaune|r", eas
 local ADVICE = { ["Vendre HV"] = "|cff40ff40Vendre HV|r", Garder = "|cff66ccffGarder|r", PNJ = "|cffffd100PNJ|r",
                  Attendre = "|cffff8040Attendre|r", Fabriquer = "|cffff9900Fabriquer|r" }
 
+-- Message affiché à la place d'un tableau vide : pourquoi il est vide et quoi faire
+local EMPTY = {
+  market = "Aucun objet ne correspond. Essaie « Volume : tous » ou une autre catégorie.",
+  flip = "Aucune occasion de flip dans le dernier scan. Rescanne un peu plus tard.",
+  craft = "Aucune recette connue : ouvre une fois la fenêtre de chacun de tes métiers.",
+  level = "Aucune recette connue : ouvre une fois la fenêtre de chacun de tes métiers.",
+  bags = "Rien dans tes sacs pour l'instant : ouvre-les une fois (et ta banque) pour les relire.",
+  ledger = "Aucun courrier d'HV relevé : passe à ta boîte aux lettres après tes ventes.",
+  vendor = "Aucun achat PNJ rentable. Les marchands que tu visites sont retenus automatiquement.",
+  snipe = "Aucune enchère sous le prix de rachat PNJ dans le dernier scan.",
+  farm = "Aucune session de farm : tape /ahl farm start avant de farmer, puis /ahl farm stop.",
+}
+local NO_SCAN = "Pas encore de scan sur ce royaume : ouvre l'HV et clique « Scanner l'HV »."
+local NEEDS_SCAN = { market = true, flip = true, snipe = true, vendor = true, craft = true, level = true }
+
 -- « +45 % » coloré comme les pastilles des sacs : vert mieux à l'HV, jaune pareil, rouge au PNJ
 function UI.CompareCell(c)
   if not c then return "|cff808080—|r" end
@@ -296,11 +311,25 @@ function UI.Build()
   -- Filtres (onglet Marché)
   UI.catButton = Look.Button(f, "", 140, 22)
   UI.catButton:SetPoint("TOPRIGHT", -134, -54)
-  UI.catButton:SetScript("OnClick", function()
-    UI.cat = UI.cat % #CATS + 1
+  -- clic gauche : catégorie suivante ; clic droit : précédente
+  if UI.catButton.RegisterForClicks then UI.catButton:RegisterForClicks("LeftButtonUp", "RightButtonUp") end
+  UI.catButton:SetScript("OnClick", function(_, button)
+    local step = button == "RightButton" and -2 or 0
+    UI.cat = (UI.cat + step) % #CATS + 1
     UI.offset = 0
     UI.Refresh()
   end)
+  UI.catButton:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+    GameTooltip:AddLine("Catégorie")
+    for i, c in ipairs(CATS) do
+      local on = i == UI.cat
+      GameTooltip:AddLine((on and "> " or "   ") .. c[1], on and 1 or 0.7, on and 0.82 or 0.7, on and 0 or 0.7)
+    end
+    GameTooltip:AddLine("Clic : suivante · clic droit : précédente", 0.5, 0.8, 1)
+    GameTooltip:Show()
+  end)
+  UI.catButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
   UI.liqButton = Look.Button(f, "", 118, 22)
   UI.liqButton:SetPoint("TOPRIGHT", -14, -54)
   UI.liqButton:SetScript("OnClick", function()
@@ -308,6 +337,13 @@ function UI.Build()
     UI.offset = 0
     UI.Refresh()
   end)
+  UI.liqButton:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+    GameTooltip:AddLine("Volume")
+    GameTooltip:AddLine("« 1+/jour » cache les objets qui se vendent moins d'une fois par jour : leur prix est peu fiable et ils immobilisent ton or.", 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  UI.liqButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
   UI.viewButton = Look.Button(f, "", 160, 22)
   UI.viewButton:SetPoint("TOPRIGHT", -14, -54)
@@ -315,12 +351,26 @@ function UI.Build()
     UI.SetMode(UI.mode == "craft" and "level" or "craft")
   end)
 
-  UI.help = Look.Text(f, "small", "TEXT", "GameFontDisableSmall")
-  UI.help:SetPoint("TOPLEFT", 14, -58)
-  UI.help:SetWidth(WIDTH - 28)
+  -- Aide : une seule ligne (les longues aides débordaient sur les en-têtes) ; le texte entier
+  -- s'affiche en survolant la ligne
+  UI.helpZone = CreateFrame("Frame", nil, f)
+  UI.helpZone:SetHeight(18)
+  UI.helpZone:EnableMouse(true)
+  UI.help = Look.Text(UI.helpZone, "small", "TEXT", "GameFontDisableSmall")
+  UI.help:SetAllPoints()
   UI.help:SetJustifyH("LEFT")
+  UI.help:SetWordWrap(false)
+  UI.helpZone:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_NONE")
+    GameTooltip:SetPoint("TOPLEFT", self, "BOTTOMLEFT", 0, -2)
+    GameTooltip:AddLine(MODES[UI.mode].title)
+    GameTooltip:AddLine(UI.helpText or "", 1, 1, 1, true)
+    GameTooltip:AddLine("Clic sur un en-tête : trier · molette : défiler", 0.5, 0.8, 1)
+    GameTooltip:Show()
+  end)
+  UI.helpZone:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
-  -- En-têtes cliquables (tri)
+  -- En-têtes cliquables (tri) ; une flèche marque la colonne triée
   UI.headers = {}
   for i = 1, MAX_COLS do
     local h = CreateFrame("Button", nil, f)
@@ -328,20 +378,38 @@ function UI.Build()
     local fs = Look.Text(h, "small", "LABEL", "GameFontNormalSmall")
     fs:SetAllPoints()
     h.text = fs
+    local arrow = h:CreateTexture(nil, "OVERLAY")
+    arrow:SetTexture("Interface\\Buttons\\UI-SortArrow")
+    arrow:SetSize(9, 8)
+    arrow:Hide()
+    h.arrow = arrow
     h:SetScript("OnClick", function()
       local key = MODES[UI.mode].cols[i][4]
       if UI.sortKey == key then UI.sortDesc = not UI.sortDesc else UI.sortKey, UI.sortDesc = key, true end
+      UI.offset = 0
       UI.Refresh()
     end)
+    h:SetScript("OnEnter", function(self)
+      GameTooltip:SetOwner(self, "ANCHOR_TOP")
+      GameTooltip:AddLine("Clic : trier par « " .. MODES[UI.mode].cols[i][1] .. " » · reclic : inverser", 0.5, 0.8, 1)
+      GameTooltip:Show()
+    end)
+    h:SetScript("OnLeave", function() GameTooltip:Hide() end)
     UI.headers[i] = h
   end
 
-  -- Lignes
+  -- Lignes (une sur deux légèrement plus claire pour suivre la ligne d'un bout à l'autre)
   UI.rows = {}
   for r = 1, MAX_ROWS do
     local row = CreateFrame("Button", nil, f)
-    row:SetSize(WIDTH - 28, ROW_H)
+    row:SetHeight(ROW_H)
     row:SetPoint("TOPLEFT", 14, -78 - r * ROW_H)
+    row:SetPoint("TOPRIGHT", f, "TOPRIGHT", -14, -78 - r * ROW_H)
+    if r % 2 == 0 then
+      local zebra = row:CreateTexture(nil, "BACKGROUND")
+      zebra:SetAllPoints()
+      zebra:SetColorTexture(1, 1, 1, 0.03)
+    end
     Look.RowHighlight(row)
     row.cells = {}
     for i = 1, MAX_COLS do
@@ -352,12 +420,19 @@ function UI.Build()
     end
     row:SetScript("OnEnter", function(self)
       local id = self.entry and entryItem(self.entry)
-      if id then
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetHyperlink("item:" .. id)
-        if ns.isAHOpen() then GameTooltip:AddLine("Clic : afficher à l'achat dans l'HV · Maj-clic : lien", 0.5, 0.8, 1) end
-        GameTooltip:Show()
+      GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+      if id then GameTooltip:SetHyperlink("item:" .. id) end
+      -- texte des cellules coupées (« Signaux », « Pourquoi »…) en entier
+      local cols = MODES[UI.mode].cols
+      for i, col in ipairs(cols) do
+        local fs = self.cells[i]
+        if i > 1 and fs.IsTruncated and fs:IsTruncated() == true then
+          GameTooltip:AddLine(col[1] .. " : |cffffffff" .. (fs:GetText() or "") .. "|r", 1, 0.82, 0, true)
+        end
       end
+      if id and ns.isAHOpen() then GameTooltip:AddLine("Clic : afficher à l'achat dans l'HV · Maj-clic : lien", 0.5, 0.8, 1) end
+      local n = GameTooltip:NumLines()
+      if id or (type(n) == "number" and n > 0) then GameTooltip:Show() else GameTooltip:Hide() end
     end)
     row:SetScript("OnLeave", function() GameTooltip:Hide() end)
     row:SetScript("OnClick", function(self)
@@ -382,13 +457,17 @@ function UI.Build()
     UI.Refresh()
   end)
 
-  UI.footer = Look.Text(f, "small", "LABEL", "GameFontDisableSmall")
-  UI.footer:SetPoint("BOTTOMLEFT", 14, 12)
-  UI.footer:SetJustifyH("LEFT")
+  -- Tableau vide : explication à la place des lignes
+  UI.empty = Look.Text(f, "body", "LABEL", "GameFontDisable")
+  UI.empty:SetPoint("TOPLEFT", 40, -78 - 3 * ROW_H)
+  UI.empty:SetPoint("TOPRIGHT", f, "TOPRIGHT", -40, -78 - 3 * ROW_H)
+  UI.empty:SetJustifyH("CENTER")
+  UI.empty:Hide()
 
   local scanBtn = Look.Button(f, "Scanner l'HV", 110, 22)
   scanBtn:SetPoint("BOTTOMRIGHT", -12, 8)
-  scanBtn:SetScript("OnClick", function() ns.safe("scan", ns.Scan.Start) end)
+  scanBtn:SetScript("OnClick", function() ns.safe("scan", ns.Scan.Start); UI.Refresh() end)
+  UI.scanButton = scanBtn
 
   local claudeBtn = Look.Button(f, "Rapport Claude", 120, 22)
   claudeBtn:SetPoint("RIGHT", scanBtn, "LEFT", -6, 0)
@@ -397,6 +476,13 @@ function UI.Build()
   local optBtn = Look.Button(f, "Options", 70, 22)
   optBtn:SetPoint("RIGHT", claudeBtn, "LEFT", -6, 0)
   optBtn:SetScript("OnClick", function() ns.safe("options", ns.Options.Toggle) end)
+
+  -- le pied de page s'arrête avant les boutons (il passait dessous quand le texte était long)
+  UI.footer = Look.Text(f, "small", "LABEL", "GameFontDisableSmall")
+  UI.footer:SetPoint("BOTTOMLEFT", 14, 12)
+  UI.footer:SetPoint("BOTTOMRIGHT", optBtn, "BOTTOMLEFT", -10, 4)
+  UI.footer:SetJustifyH("LEFT")
+  UI.footer:SetWordWrap(false)
 
   UI.SetMode("market")
 end
@@ -443,7 +529,17 @@ function UI.SetMode(mode)
   else
     UI.viewButton:Hide()
   end
-  UI.help:SetWidth((isMarket and (WIDTH - 310)) or (isCraft and (WIDTH - 190)) or (WIDTH - 28))
+  -- l'aide s'arrête avant les boutons de filtre, quelle que soit la largeur de l'onglet qui l'accueille
+  local z = UI.helpZone
+  z:ClearAllPoints()
+  z:SetPoint("TOPLEFT", UI.content, "TOPLEFT", 14, -56)
+  if isMarket then
+    z:SetPoint("TOPRIGHT", UI.catButton, "TOPLEFT", -10, -2)
+  elseif isCraft then
+    z:SetPoint("TOPRIGHT", UI.viewButton, "TOPLEFT", -10, -2)
+  else
+    z:SetPoint("TOPRIGHT", UI.content, "TOPRIGHT", -14, -56)
+  end
   UI.Refresh()
 end
 
@@ -460,10 +556,32 @@ function UI.Refresh()
   if not UI.frame then return end
   local m = MODES[UI.mode]
   UI.catButton:SetText("Catégorie : " .. CATS[UI.cat][1])
-  UI.liqButton:SetText(UI.liquidOnly and "Liquides seuls." or "Tous volumes")
+  UI.liqButton:SetText(UI.liquidOnly and "Volume : 1+/jour" or "Volume : tous")
   UI.title:SetText("AHLedger — " .. ns.realmKey())
   local help = m.help
-  UI.help:SetText(type(help) == "function" and help() or help)
+  UI.helpText = type(help) == "function" and help() or help
+  UI.help:SetText(UI.helpText)
+  local scanning = ns.Scan and ns.Scan.running
+  if UI.scanButton then UI.scanButton:SetText(scanning and "Scan en cours…" or "Scanner l'HV") end
+
+  -- colonne triée : en-tête en surbrillance et flèche (bas = décroissant)
+  for i, h in ipairs(UI.headers) do
+    local col = m.cols[i]
+    local on = col and col[4] == UI.sortKey
+    if on then
+      h.text:SetTextColor(1, 1, 1)
+      h.arrow:ClearAllPoints()
+      local tw = h.text:GetStringWidth()
+      if type(tw) ~= "number" then tw = 0 end
+      if col[5] == "RIGHT" then h.arrow:SetPoint("RIGHT", h, "RIGHT", -tw - 3, 0) else h.arrow:SetPoint("LEFT", h, "LEFT", tw + 3, 0) end
+      if UI.sortDesc then h.arrow:SetTexCoord(0, 0.5625, 0, 1) else h.arrow:SetTexCoord(0, 0.5625, 1, 0) end
+      h.arrow:Show()
+    else
+      ns.Look.Color(h.text, "LABEL")
+      if not ns.Look.Daylight() then h.text:SetTextColor(1, 0.82, 0) end
+      h.arrow:Hide()
+    end
+  end
 
   local data = m.rows()
   sortRows(data, UI.sortKey, UI.sortDesc)
@@ -481,13 +599,23 @@ function UI.Refresh()
   end
 
   local db = ns.realmDB()
+  if #data == 0 then
+    UI.empty:SetText((NEEDS_SCAN[UI.mode] and not db.lastScanTime) and NO_SCAN or EMPTY[UI.mode] or "")
+    UI.empty:Show()
+  else
+    UI.empty:Hide()
+  end
+
   local nDays, obs = 0, 0
   for _, d in pairs(db.days) do
     nDays = nDays + 1
     obs = obs + d.obs
   end
-  UI.footer:SetText(("%d lignes · historique %d j · %.1f h de marché observées · dernier scan : %s"):format(
-    #data, nDays, obs / 3600,
+  -- « lignes 1–16 sur 120 » (la molette fait défiler) ; court pour que la date du scan tienne
+  local range = #data > shown and ("lignes %d–%d sur %d"):format(
+    UI.offset + 1, math.min(#data, UI.offset + shown), #data) or (#data == 1 and "1 ligne" or ("%d lignes"):format(#data))
+  UI.footer:SetText(("%s · historique %d j · %.1f h observées · scan %s"):format(
+    range, nDays, obs / 3600,
     db.lastScanTime and date("%d/%m %H:%M", db.lastScanTime) or "jamais"))
 end
 

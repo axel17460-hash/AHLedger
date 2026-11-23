@@ -30,4 +30,5 @@ read_globals = {
   "GetLootSlotLink", "GetNumLootItems", "GetLootSlotInfo",
   "DaylightUI", "OneForAll", "C_AddOns", "IsAddOnLoaded",
   "IsShiftKeyDown", "Settings", "InterfaceOptions_AddCategory",
+  "Minimap", "GetMinimapShape", "GetCursorPosition",
 }
