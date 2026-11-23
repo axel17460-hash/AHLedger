@@ -17,6 +17,8 @@ Analysis.FLIP_MIN_PROFIT = 2000 -- 20 pa mini par opération
 Analysis.FLIP_STORE_MIN_ROI = 0.25  -- l'or reste immobilisé et le prix peut ne pas remonter : marge mini plus haute
 Analysis.FLIP_STORE_GAP = 0.10      -- le prix habituel doit dépasser d'au moins 10 % la revente possible tout de suite
 Analysis.FLIP_TEST_DAYS = 0.5       -- rebonds encore inconnus : on n'achète qu'une demi-journée de ventes
+Analysis.FLIP_TEST_MAX_QTY = 20     -- ... sans dépasser 20 unités (le volume estimé peut être gonflé par les annulations)
+Analysis.FLIP_TEST_MAX_COST = 200000 -- ... ni 20 po d'achat
 
 local History = ns.History
 
@@ -343,10 +345,12 @@ end
 
 -- Parcourt le carnet d'ordres du moins cher au plus cher, jusqu'à cap unités. Pour chaque quantité :
 -- fn(quantité, coût, prix max payé, prochaine enchère qui restera en vente après nos achats)
-local function walkBook(levels, cap, fn)
+-- (et sans dépasser maxCost d'achat au total, s'il est donné)
+local function walkBook(levels, cap, fn, maxCost)
   local qty, cost = 0, 0
   for k, l in ipairs(levels) do
     local take = math.min(l[2], cap - qty)
+    if maxCost and l[1] > 0 then take = math.min(take, math.floor((maxCost - cost) / l[1])) end
     if take <= 0 then break end
     qty, cost = qty + take, cost + take * l[1]
     fn(qty, cost, l[1], take < l[2] and l[1] or (levels[k + 1] and levels[k + 1][1]))
@@ -361,7 +365,7 @@ end
 --   On achète pour revendre au prix habituel d'avant le creux quand il remonte. Bénéfice espéré =
 --   chance de remonter × revente au prix habituel + chance de ne pas remonter × revente au prix d'aujourd'hui,
 --   d'après les creux passés de l'objet (ns.Rebound). Tant qu'ils sont inconnus : une chance sur deux,
---   et on n'achète qu'une demi-journée de ventes, pour apprendre.
+--   et on n'achète qu'une demi-journée de ventes (20 unités et 20 po au plus), pour apprendre.
 -- Revendre tout de suite passe avant stocker quand les deux sont possibles.
 function Analysis.FlipFor(s, book, odds)
   if not (s and book and s.realPrice and s.perDay and s.perDay >= 1) then return nil end
@@ -386,10 +390,15 @@ function Analysis.FlipFor(s, book, odds)
   if odds == nil and ns.Rebound then odds = ns.Rebound.Now(ns.realmDB(), s.id) end
   if not (odds and odds.ref) then return nil end
   -- un marché qui baisse régulièrement n'est pas un creux, sauf si l'objet a prouvé qu'il remonte
-  if s.trend and s.trend <= -0.03 and not (odds.known and odds.rate >= 0.6) then return nil end
+  -- (tendance des 7 derniers jours, ou pente depuis le début du creux : la plus basse des deux)
+  local trend = s.trend
+  if odds.dipTrend and (not trend or odds.dipTrend < trend) then trend = odds.dipTrend end
+  if trend and trend <= -0.03 and not (odds.known and odds.rate >= 0.6) then return nil end
   local storeAt = odds.ref * (1 - ns.Rebound.RECOVER)
+  -- rebonds inconnus : petit achat pour apprendre, plafonné en unités et en or
   local cap = odds.known and math.floor(s.perDay * Analysis.FLIP_HOLD_DAYS)
-    or math.max(1, math.floor(s.perDay * Analysis.FLIP_TEST_DAYS))
+    or math.min(Analysis.FLIP_TEST_MAX_QTY, math.max(1, math.floor(s.perDay * Analysis.FLIP_TEST_DAYS)))
+  local maxCost = not odds.known and Analysis.FLIP_TEST_MAX_COST or nil
   local stock
   walkBook(levels, cap, function(qty, cost, maxBuy, nextP)
     local nowAt = math.min(target, nextP and (nextP - 1) or target)
@@ -403,7 +412,7 @@ function Analysis.FlipFor(s, book, odds)
                 weekday = odds.weekday, ref = odds.ref, name = s.name,
                 days = (odds.wait or 0) + qty / s.perDay }
     end
-  end)
+  end, maxCost)
   if stock and stock.roi >= Analysis.FLIP_STORE_MIN_ROI and stock.profit >= Analysis.FLIP_MIN_PROFIT then return stock end
 end
 

@@ -726,6 +726,47 @@ assert rb[18] is None and rb[19] == "stock", rb                  # marché en ba
 assert rb[20] == "now" and rb[21] == "tout de suite", rb
 assert rb[22] == 10 and abs(rb[23] - 3.2) < 1e-9 and abs(rb[24] - 45) < 1e-9 and rb[25] is None, rb
 
+# Faux creux : marché qui s'effondre (cas réel du Tissu runique sur Forever, 68 pa → 6 pa en 2 semaines).
+# Ni « à stocker » au prix d'avant la chute, ni achat de tout le carnet pour « tester ».
+rc = lua.eval("""function(ns)
+  local R, A = ns.Rebound, ns.Analysis
+  local saved = R.Series
+  local db = { hist = {}, rebound = {} }
+  local s = { id = 14047, name = "Runecloth", realPrice = 634, avg7 = 625, perDay = 11000, deposit = 60, sellThrough = 0.99 }
+  local book = { levels = { { 599, 298 }, { 600, 102 }, { 628, 476 }, { 634, 556 }, { 699, 66 }, { 900, 2 } } }
+  -- 1) creux de 10 jours sans remonter : nouveau prix habituel
+  local old = { [100] = 7752, [101] = 3419, [102] = 2957, [103] = 1759, [105] = 757, [106] = 666,
+                [109] = 644, [112] = 594, [113] = 655 }
+  R.Series = function() return old end
+  local o1 = R.Now(db, 14047, 113)
+  local f1 = A.FlipFor(s, book, o1)
+  -- 2) creux de 2 jours qui continue de baisser
+  local young = { [100] = 1000, [101] = 1000, [102] = 1000, [103] = 1000, [104] = 800, [105] = 650, [106] = 500 }
+  R.Series = function() return young end
+  local o2 = R.Now(db, 14047, 106)
+  -- 3) creux de 2 jours qui se stabilise : reste à stocker, mais petit achat de test
+  local flat = { [100] = 1000, [101] = 1000, [102] = 1000, [103] = 1000, [104] = 600, [105] = 610, [106] = 605 }
+  R.Series = function() return flat end
+  local o3 = R.Now(db, 14047, 106)
+  R.Series = saved
+  local s3 = { id = 14047, name = "Runecloth", realPrice = 605, avg7 = 605, perDay = 11000, deposit = 0, sellThrough = 0.9 }
+  local f3 = A.FlipFor(s3, { levels = { { 500, 5000 } } }, o3)
+  -- 4) objet cher : le plafond en or limite le test
+  local s4 = { id = 1, name = "Cher", realPrice = 42000, avg7 = 42000, perDay = 100, deposit = 0, sellThrough = 0.9 }
+  local f4 = A.FlipFor(s4, { levels = { { 40000, 100 } } }, { ref = 100000, n = 0, ok = 0, rate = 0.5, known = false })
+  return o1 and o1.settled, o1 and o1.dipSince, o1 and o1.ref, f1,
+         o2 and o2.dipSince, o2 and o2.dipTrend, A.FlipFor(s, book, o2),
+         o3 and o3.settled, o3 and o3.dipTrend, f3 and f3.kind, f3 and f3.qty,
+         f4 and f4.qty, f4 and f4.cost
+end""")(ns)
+print("Faux creux :", rc)
+assert rc[0] is True and rc[1] is None and rc[2] < 800 and rc[3] is None, rc   # prix habituel = celui d'aujourd'hui
+assert rc[4] == 2 and rc[5] < -0.03 and rc[6] is None, rc                      # chute en cours : rien à stocker
+assert not rc[7] and rc[8] is not None and rc[8] > -0.03, rc
+assert rc[9] == "stock" and rc[10] == 20, rc                                    # test : 20 unités, pas 5 500
+assert rc[11] == 5 and rc[12] <= 200000, rc                                     # test : 20 po au plus
+print("OK : faux creux (marché qui s'effondre), achats de test plafonnés")
+
 # Meilleur jour de la semaine : prix +10 % un jour sur 7, sur 5 semaines
 wd = lua.eval("""function(ns)
   local series, base = {}, 20000

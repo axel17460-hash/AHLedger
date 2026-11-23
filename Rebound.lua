@@ -19,7 +19,8 @@ Rebound.MAX_WAIT = 14       -- au-delà de 14 jours sans remonter, le creux est 
 Rebound.REF_DAYS = 7        -- prix habituel = médiane des 7 jours précédents
 Rebound.MIN_REF = 3         -- ... dont au moins 3 jours avec un prix
 Rebound.MIN_EVENTS = 3      -- creux terminés avant de faire confiance au taux et au délai
-Rebound.KEEP_WAITS = 20     -- délais gardés par objet
+Rebound.SETTLE_DAYS = 5     -- creux de 5 jours sans remonter : c'est le nouveau prix, plus un creux
+Rebound.KEEP_WAITS = 20    -- délais gardés par objet
 Rebound.SERIES_DAYS = 45    -- jours d'historique Auctionator lus
 Rebound.WEEK_MIN_DAYS = 21  -- jours de prix avant de parler du jour de la semaine
 Rebound.WEEK_MIN_GAIN = 0.05
@@ -181,11 +182,28 @@ function Rebound.Now(db, id, today)
   local done = {}
   for d, p in pairs(series) do if d < today then done[d] = p end end
   local _, dip = Rebound.Events(done, today - 1)
+  local out = Rebound.Get(db, id)
+  local since = dip and dip.start and (today - dip.start) or nil
+  -- Un creux qui dure sans jamais remonter n'est plus un creux : c'est le nouveau prix habituel
+  -- (royaume récent qui se dégonfle, objet devenu courant). Au-delà de SETTLE_DAYS (ou du délai lent
+  -- d'un objet qui a prouvé qu'il remonte), on reprend la médiane des derniers jours comme référence.
+  if since and since >= math.max(Rebound.SETTLE_DAYS, out.known and out.slow or 0) then
+    out.settled, dip = true, nil
+  end
   local ref = dip and dip.ref or Rebound.RefAt(series, today)
   if not ref then return nil end
-  local out = Rebound.Get(db, id)
   out.ref = ref
-  out.dipSince = dip and dip.start and (today - dip.start) or nil
+  out.dipSince = dip and since or nil
+  -- Pente depuis le début du creux (aujourd'hui compris) : un vrai creux se stabilise ou remonte,
+  -- un marché qui s'effondre continue de baisser
+  if dip then
+    local pts = {}
+    for d, p in pairs(series) do
+      if d >= dip.start and d <= today and p > 0 then pts[#pts + 1] = { d - today, math.log(p) } end
+    end
+    local b = ns.Analysis.robustSlope(pts, 2)
+    out.dipTrend = b and (math.exp(b) - 1) or nil
+  end
   out.weekday = Rebound.Weekday(series)
   return out
 end
