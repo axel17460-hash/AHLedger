@@ -1,4 +1,4 @@
-# AHLedger (v0.5)
+# AHLedger (v0.6)
 
 Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l'hôtel des ventes et suit les hausses et baisses de prix, pour savoir quoi farmer avant tout le monde. L'analyse se fait entièrement en jeu.
 
@@ -12,6 +12,12 @@ Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l
   - **Marché** : classement par score « à farmer », avec prix, tendance/jour, vendus/jour, stock, or/jour et signaux. Filtres par catégorie et option pour n'afficher que les marchés liquides. Clique sur un en-tête pour trier.
   - **Flip HV** : enchères affichées sous le prix réel de vente. Pour chaque objet : jusqu'à quel prix unitaire acheter, combien (au plus 2 jours de ventes), à quel prix revendre (juste sous la prochaine enchère restante, sans dépasser le prix réel de vente) et le bénéfice attendu, net de la commission et des dépôts perdus sur les invendus. Seuils : ROI ≥ 15 % et bénéfice ≥ 20 pa. Clic = rechercher l'objet.
   - **Artisanat** : tes recettes, relevées quand tu ouvres une fenêtre de métier (ouvre chacun de tes métiers une fois). Coût des composants au moins cher entre PNJ (marchands déjà visités) et HV, valeur à l'HV ou au PNJ, bénéfice, et couleur de la recette (orange/jaune = gain de compétence).
+  - **Mes objets** : chaque objet de tes sacs et de ta banque (relue à chaque visite), avec un conseil :
+    - **Vendre HV** : au prix indiqué, juste sous l'enchère la moins chère, et en quantité limitée à environ une journée de ventes pour ne pas inonder le marché.
+    - **Garder** : le prix monte d'au moins 3 %/jour et le marché n'est pas saturé.
+    - **PNJ** : le marchand paie plus que l'HV, net des frais.
+    - **Attendre** : quelqu'un brade sous 85 % du prix habituel.
+  - **Bilan** : tes ventes, achats et expirations des 30 derniers jours, lus dans tes courriers d'HV (il suffit d'ouvrir la boîte aux lettres). Pour chaque objet : solde, prix moyen obtenu et écart avec le prix prévu par l'addon. Dès 5 ventes, la commission et le dépôt réels de Forever sont mesurés sur tes factures et remplacent les valeurs supposées dans tous les calculs. `/ahl bilan` résume le tout dans le chat.
   - **Achat PNJ** : objets achetés chez des marchands que tu as déjà ouverts et revendables à profit (commission déduite).
   - **Farm** : tes sessions `/ahl farm start` / `/ahl farm stop`, regroupées par zone et valorisées en or/h aux prix actuels.
   - **Revente PNJ** : les enchères affichées moins cher que ce que le marchand en donne, repérées au dernier scan. Il y a deux types : achat immédiat, et enchère qui se termine dans moins de 2 h. Clique sur une ligne pour lancer la recherche de l'objet dans l'onglet « Parcourir » ; l'achat reste manuel.
@@ -44,7 +50,7 @@ Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l
 - Les seuils de dépeçage des cuirs et écailles (`Professions.lua`) sont approximatifs.
 
 ## Commandes
-`/ahl` · `/ahl scan` · `/ahl status` · `/ahl metiers` · `/ahl farm start|stop` · `/ahl raw on|off` (snapshots bruts pour l'export Python) · `/ahl prune <n>`
+`/ahl` · `/ahl scan` · `/ahl status` · `/ahl metiers` · `/ahl bilan` · `/ahl farm start|stop` · `/ahl raw on|off` (snapshots bruts pour l'export Python) · `/ahl prune <n>`
 
 ## Export Python (optionnel)
 ```

@@ -2,7 +2,7 @@
 ## Title: AHLedger
 ## Notes: Collecte de données d'hôtel des ventes, prix vendeurs et sessions de farm pour analyse hors jeu.
 ## Author: Axel
-## Version: 0.5.0
+## Version: 0.6.0
 ## SavedVariables: AHLedgerDB
 
 # 16001 = WoW Forever 1.60 (même valeur qu'Auctionator)
@@ -14,6 +14,8 @@ Scan.lua
 Vendor.lua
 Farm.lua
 Professions.lua
+Bags.lua
+Ledger.lua
 Snipe.lua
 Bridge.lua
 Tooltip.lua

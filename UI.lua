@@ -18,6 +18,9 @@ local CATS = {
 local DIFF = { optimal = "|cffff8040orange|r", medium = "|cffffff00jaune|r", easy = "|cff40c040vert|r",
                trivial = "|cff808080gris|r" }
 
+local ADVICE = { ["Vendre HV"] = "|cff40ff40Vendre HV|r", Garder = "|cff66ccffGarder|r", PNJ = "|cffffd100PNJ|r",
+                 Attendre = "|cffff8040Attendre|r" }
+
 local function share(v) return v and ("%.0f%%"):format(v * 100) or "|cff808080—|r" end
 
 local function itemLabel(id, s)
@@ -35,7 +38,7 @@ local MODES = {
   market = {
     title = "Marché",
     sort = "score",
-    help = "Score « à farmer » : or/jour (net de commission et des dépôts perdus sur les invendus) × tendance × signaux. Stock (j) = jours de ventes déjà en rayon ; Écoulé = part des enchères vendues avant d'expirer.",
+    help = "Or/jour net × tendance × signaux. Survole un objet pour le détail.",
     cols = {
       { "Objet", 160, function(e) return itemLabel(e.id, e) end, "name" },
       { "Prix/u", 78, function(e) return ns.money(e.price) end, "price", "RIGHT" },
@@ -95,6 +98,46 @@ local MODES = {
       { "Niveau", 55, function(e) return DIFF[e.diff] or "-" end, "diff" },
     },
     rows = function() return ns.Analysis.Crafts() end,
+  },
+  bags = {
+    title = "Mes objets",
+    sort = "value",
+    help = "Tes sacs (et ta banque, relue à chaque visite) : vendre à l'HV au prix indiqué, garder, vendre au PNJ ou attendre que le marché remonte.",
+    cols = {
+      { "Objet", 160, function(e) return itemLabel(e.id, e.s) end, "name" },
+      { "Qté", 40, function(e) return tostring(e.count) end, "count", "RIGHT" },
+      { "Où", 70, function(e) return e.where end, "where" },
+      { "Conseil", 70, function(e) return ADVICE[e.action] or e.action end, "action" },
+      { "Prix conseillé/u", 90, function(e) return e.post and ns.money(e.post) or "-" end, "post", "RIGHT" },
+      { "À poster", 50, function(e) return e.postQty and tostring(e.postQty) or "-" end, "postQty", "RIGHT" },
+      { "Valeur nette", 82, function(e) return ns.money(e.value) end, "value", "RIGHT" },
+      { "Pourquoi", 190, function(e) return e.why or "" end, "why" },
+    },
+    rows = function() return ns.Bags.Advice() end,
+  },
+  ledger = {
+    title = "Bilan",
+    sort = "balance",
+    help = function()
+      local _, t = ns.Ledger.Summary()
+      local c = ns.Ledger.DB().calib or {}
+      local calib = c.cut and ("commission mesurée %.1f %%"):format(c.cut * 100)
+        or ("commission supposée %.0f %% (%d/%d ventes)"):format(ns.Analysis.AH_CUT * 100, c.n or 0, ns.Ledger.MIN_CALIB)
+      return ("%d derniers jours, d'après tes courriers d'HV : recettes %s − achats %s = |cffffffff%s|r · %d vendus, %d expirés · %s."):format(
+        ns.Ledger.DAYS, ns.money(t.revenue), ns.money(t.spent), ns.money(t.revenue - t.spent), t.sold, t.expired, calib)
+    end,
+    cols = {
+      { "Objet", 160, function(e) return e.id and itemLabel(e.id) or (e.name or "?") end, "name" },
+      { "Achetés", 50, function(e) return tostring(e.bought) end, "bought", "RIGHT" },
+      { "Dépensé", 80, function(e) return ns.money(e.spent) end, "spent", "RIGHT" },
+      { "Vendus", 50, function(e) return tostring(e.sold) end, "sold", "RIGHT" },
+      { "Expirés", 50, function(e) return tostring(e.expired) end, "expired", "RIGHT" },
+      { "Recettes", 80, function(e) return ns.money(e.revenue) end, "revenue", "RIGHT" },
+      { "Vendu moy./u", 80, function(e) return ns.money(e.avgSale) end, "avgSale", "RIGHT" },
+      { "vs prévu", 55, function(e) return ns.pct(e.gap) end, "gap", "RIGHT" },
+      { "Solde", 85, function(e) return (e.balance >= 0 and "|cff40ff40" or "|cffff5050") .. ns.money(e.balance) .. "|r" end, "balance", "RIGHT" },
+    },
+    rows = function() return (ns.Ledger.Summary()) end,
   },
   vendor = {
     title = "Achat PNJ",
@@ -195,20 +238,20 @@ function UI.Build()
   -- Onglets
   local x = 12
   UI.modeButtons = {}
-  for _, key in ipairs({ "market", "flip", "craft", "vendor", "snipe", "farm" }) do
+  for _, key in ipairs({ "market", "flip", "craft", "bags", "ledger", "vendor", "snipe", "farm" }) do
     local b = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    b:SetSize(84, 22)
+    b:SetSize(94, 22)
     b:SetPoint("TOPLEFT", x, -30)
     b:SetText(MODES[key].title)
     b:SetScript("OnClick", function() UI.SetMode(key) end)
     UI.modeButtons[key] = b
-    x = x + 86
+    x = x + 99
   end
 
   -- Filtres (onglet Marché)
   UI.catButton = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   UI.catButton:SetSize(140, 22)
-  UI.catButton:SetPoint("TOPRIGHT", -134, -30)
+  UI.catButton:SetPoint("TOPRIGHT", -134, -54)
   UI.catButton:SetScript("OnClick", function()
     UI.cat = UI.cat % #CATS + 1
     UI.offset = 0
@@ -216,7 +259,7 @@ function UI.Build()
   end)
   UI.liqButton = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   UI.liqButton:SetSize(118, 22)
-  UI.liqButton:SetPoint("TOPRIGHT", -14, -30)
+  UI.liqButton:SetPoint("TOPRIGHT", -14, -54)
   UI.liqButton:SetScript("OnClick", function()
     UI.liquidOnly = not UI.liquidOnly
     UI.offset = 0
@@ -332,7 +375,7 @@ function UI.SetMode(mode)
   end
   local isMarket = mode == "market"
   if isMarket then UI.catButton:Show(); UI.liqButton:Show() else UI.catButton:Hide(); UI.liqButton:Hide() end
-  UI.help:SetText(MODES[mode].help)
+  UI.help:SetWidth(isMarket and (WIDTH - 310) or (WIDTH - 28))
   UI.Refresh()
 end
 
@@ -342,6 +385,8 @@ function UI.Refresh()
   UI.catButton:SetText("Catégorie : " .. CATS[UI.cat][1])
   UI.liqButton:SetText(UI.liquidOnly and "Liquides seuls." or "Tous volumes")
   UI.title:SetText("AHLedger — " .. ns.realmKey())
+  local help = m.help
+  UI.help:SetText(type(help) == "function" and help() or help)
 
   local data = m.rows()
   sortRows(data, UI.sortKey, UI.sortDesc)

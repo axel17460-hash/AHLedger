@@ -190,6 +190,48 @@ tt = [strip(re.sub(r"\|T[^|]*\|t", "", x)) for x in lua.eval("TT").values()]
 print("\n".join(tt))
 assert any(x.startswith("Tendance 24 h = +") for x in tt), tt
 
+# Conseiller d'inventaire : soie en hausse -> garder ; tisse-mage en baisse -> vendre sous l'enchère la moins chère
+lua.execute("""
+BAGS = { [0] = { { 4306, 40 }, { 4338, 30 }, { 2589, 3 } } }
+GetContainerNumSlots = function(b) return BAGS[b] and #BAGS[b] or 0 end
+GetContainerItemInfo = function(b, s) local x = BAGS[b][s]; return nil, x[2], false, 1, false, false, nil, false, false, x[1] end
+fire("BAG_UPDATE_DELAYED"); runTimers()
+""")
+adv = {e.id: e for e in ns.Bags.Advice().values()}
+for e in adv.values():
+    print("Conseil", strip(lua.eval("function(id) return AHLedgerDB.items[id].n end")(e.id)), e.count, e.action, e.post, e.postQty, strip(e.why))
+assert adv[4306].action == "Garder"
+mage = ns.Analysis.Get(4338)
+assert adv[4338].action == "Vendre HV" and adv[4338].post == (mage.minNow - 1 if mage.minNow else int(mage.price)) and adv[4338].postQty == 30
+ns.UI.SetMode("bags"); assert ns.UI.rows[1].shown
+
+# Bilan : courriers d'HV (6 ventes, 1 achat, 1 expiration), relus deux fois sans doublon,
+# puis calibrage de la commission (7 %) et du dépôt (15 % du prix PNJ)
+lua.execute("""
+AUCTION_EXPIRED_MAIL_SUBJECT = "Auction expired: %s"
+MAILS = {}
+for i = 1, 6 do
+  MAILS[#MAILS + 1] = { subject = "Auction successful: Mageweave Cloth (20)", money = 20000 - 1400 + 750,
+    inv = { "seller", "Mageweave Cloth (20)", "Acheteur", 20000, 20000, 750, 1400, 0, 0 } }
+end
+MAILS[#MAILS + 1] = { subject = "Auction won: Silk Cloth", money = 0, inv = { "buyer", "Silk Cloth (20)", "Bradeur", 10000, 10000, 0, 0, 0, 0, 20 } }
+MAILS[#MAILS + 1] = { subject = "Auction expired: Healing Potion (5)", money = 0, item = 929 }
+GetInboxNumItems = function() return #MAILS end
+GetInboxHeaderInfo = function(i) local m = MAILS[i]; return nil, nil, "Hôtel des ventes", m.subject, m.money, 0, 29.5 end
+GetInboxInvoiceInfo = function(i) local m = MAILS[i]; if m.inv then return unpack(m.inv) end end
+GetInboxItemLink = function(i) local m = MAILS[i]; return m.item and ("|Hitem:" .. m.item .. "::::|h") end
+GetInboxItem = function(i) return "Healing Potion", 929, nil, 5 end
+fire("MAIL_INBOX_UPDATE"); advance(60); fire("MAIL_INBOX_UPDATE")
+""")
+rows = {(r.id or r.name): r for r in ns.Ledger.Summary()[0].values()}
+print("Bilan tisse-mage :", rows[4338].sold, rows[4338].revenue, "| soie achetée :", rows[4306].bought, "| potions expirées :", rows[929].expired)
+assert rows[4338].sold == 120 and rows[4338].revenue == 6 * (20000 - 1400)
+assert rows[4306].bought == 20 and rows[4306].spent == 10000 and rows[929].expired == 5
+assert abs(ns.Analysis.AH_CUT - 0.07) < 1e-9 and abs(ns.Analysis.DEPOSIT_RATE - 0.15) < 1e-9
+ns.UI.SetMode("ledger"); print(strip(ns.UI.help.text))
+lua.execute("SlashCmdList.AHLEDGER('bilan')")
+print(strip(list(lua.eval("LOG").values())[-1]))
+
 # Export + script Python
 sv = Path(__file__).parent / "AHLedger.lua"
 sv.write_text(lua.eval("serializeDB")())

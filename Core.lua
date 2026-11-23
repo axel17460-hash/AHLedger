@@ -208,13 +208,15 @@ local function slash(input)
     else ns.print("/ahl farm start | stop") end
   elseif cmd == "metiers" or cmd == "métiers" or cmd == "prof" then
     ns.Prof.Report()
+  elseif cmd == "bilan" then
+    ns.Ledger.Report()
   elseif cmd == "prune" then
     local keep = tonumber(rest) or 0
     local r = ns.realmDB()
     while #r.scans > keep do table.remove(r.scans, 1) end
     ns.print(("Scans purgés, %d conservés. Pense à /reload pour écrire le fichier."):format(#r.scans))
   else
-    ns.print("Commandes : /ahl (fenêtre) | scan | status | metiers | farm start | farm stop | prune <n> | raw on|off | debug")
+    ns.print("Commandes : /ahl (fenêtre) | scan | status | metiers | bilan | farm start | farm stop | prune <n> | raw on|off | debug")
   end
 end
 SlashCmdList.AHLEDGER = function(input) ns.safe("/ahl " .. (input or ""), slash, input) end
