@@ -752,9 +752,11 @@ disp = lua.eval("""function(ns)
   local savedBook = db.book[4306]
   db.book[4306] = "2,500|500:12 950:40"
   advance(10)
+  ns.ahOpen = true
   TT = {}
   GameTooltip.GetItem = function() return 'Silk', '|Hitem:4306::::|h' end
   GameTooltip.scripts.OnTooltipSetItem(GameTooltip)
+  ns.ahOpen = false
   local text = ns.Export.Build()
   db.book[4306] = savedBook
   A.FlipFor = real
@@ -768,3 +770,43 @@ assert any("Meilleur jour pour vendre : mardi" in x for x in tt), tt
 d = strip(disp)
 assert "[à stocker]" in d and "5 creux sur 6 remontés" in d and "meilleur jour de vente : mardi" in d, d
 print("OK : affichage des flips à stocker")
+
+# Options : infobulle courte hors HV, complète avec Maj, rien si désactivée ; pastilles coupées
+modes = lua.eval("""function(ns)
+  local function tip()
+    advance(10)
+    TT = {}
+    GameTooltip.GetItem = function() return 'Mageweave', '|Hitem:4338::::|h' end
+    GameTooltip.scripts.OnTooltipSetItem(GameTooltip)
+    return table.concat(TT, "\\n")
+  end
+  ns.ahOpen = false
+  local compact = tip()
+  IsShiftKeyDown = function() return true end
+  local shift = tip()
+  IsShiftKeyDown = nil
+  ns.ahOpen = true
+  local atAH = tip()
+  ns.Options.Set("ttAH", "compact")
+  local ahCompact = tip()
+  ns.ahOpen = false
+  ns.Options.Set("ttAway", "off")
+  local off = tip()
+  ns.Options.Set("bagMarks", false)
+  ns.ahOpen = true
+  local mark = ns.BagMarks.KindFor(4338)
+  AHLedgerDB.opt = nil
+  local markBack = ns.BagMarks.KindFor(4338)
+  ns.Options.Show()
+  return compact, shift, atAH, ahCompact, off, mark, markBack, ns.Options.window ~= nil
+end""")(ns)
+compact, shift, atAH, ahCompact, off = (strip(re.sub(r"\|T[^|]*\|t", "", m)) for m in modes[:5])
+print("Infobulle courte :\n" + compact)
+cl = compact.split("\n")
+assert cl[0] == "AHLedger = Maj : détails" and len(cl) <= 3, cl
+assert any(x.startswith("HV /u = ") for x in cl) and not any(x.startswith("Données") for x in cl), cl
+assert "Données : " in shift and "Tu en as 30" in shift, shift
+assert "Données : " in atAH and "Données : " not in ahCompact and "HV /u = " in ahCompact, ahCompact
+assert off == "", off
+assert modes[5] is None and modes[6] is not None and modes[7], modes
+print("OK : options d'infobulle et de pastilles")

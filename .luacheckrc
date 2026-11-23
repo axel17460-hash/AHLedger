@@ -29,4 +29,5 @@ read_globals = {
   "LOOT_ITEM_SELF", "LOOT_ITEM_SELF_MULTIPLE", "LOOT_ITEM_PUSHED_SELF", "LOOT_ITEM_PUSHED_SELF_MULTIPLE",
   "GetLootSlotLink", "GetNumLootItems", "GetLootSlotInfo",
   "DaylightUI", "OneForAll", "C_AddOns", "IsAddOnLoaded",
+  "IsShiftKeyDown", "Settings", "InterfaceOptions_AddCategory",
 }

@@ -222,8 +222,10 @@ local function slash(input)
       AuctionFrame and (AuctionFrame:IsShown() and "visible" or "caché") or "absent",
       AuctionHouseFrame and (AuctionHouseFrame:IsShown() and "visible" or "caché") or "absent",
       QueryAuctionItems and "oui" or "non", tostring(canQ), tostring(canAll), ns.realmKey()))
+  elseif cmd == "options" or cmd == "opt" then
+    ns.Options.Toggle()
   elseif cmd == "raw" then
-    AHLedgerDB.keepRaw = (rest ~= "off")
+    ns.Options.Set("keepRaw", rest ~= "off")
     ns.print("Snapshots bruts pour l'export Python : " .. (AHLedgerDB.keepRaw and "activés" or "désactivés"))
   elseif cmd == "scan" then
     ns.Scan.Start()
@@ -253,7 +255,7 @@ local function slash(input)
     while #r.scans > keep do table.remove(r.scans, 1) end
     ns.print(("Scans purgés, %d conservés. Pense à /reload pour écrire le fichier."):format(#r.scans))
   else
-    ns.print("Commandes : /ahl (fenêtre) | scan | status | metiers | bilan | claude (rapport à copier) | diag | monter <métier> [niveau] | farm start | farm stop | prune <n> | raw on|off | debug")
+    ns.print("Commandes : /ahl (fenêtre) | options | scan | status | metiers | bilan | claude (rapport à copier) | diag | monter <métier> [niveau] | farm start | farm stop | prune <n> | raw on|off | debug")
   end
 end
 SlashCmdList.AHLEDGER = function(input) ns.safe("/ahl " .. (input or ""), slash, input) end

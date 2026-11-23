@@ -10,6 +10,7 @@
 
 Core.lua
 Look.lua
+Options.lua
 History.lua
 Analysis.lua
 Rebound.lua

@@ -38,7 +38,7 @@ end
 
 -- Type de pastille pour un objet, ou nil
 function Marks.KindFor(itemID, bag, slot)
-  if not (itemID and ns.ahOpen and Marks.on) then return nil end
+  if not (itemID and ns.ahOpen and Marks.on and ns.Options.Get("bagMarks")) then return nil end
   if bound(bag, slot) then return nil end
   local c = ns.Bags.Compare(itemID)
   return c and c.kind

@@ -394,6 +394,10 @@ function UI.Build()
   claudeBtn:SetPoint("RIGHT", scanBtn, "LEFT", -6, 0)
   claudeBtn:SetScript("OnClick", function() ns.safe("rapport", ns.Export.Show) end)
 
+  local optBtn = Look.Button(f, "Options", 70, 22)
+  optBtn:SetPoint("RIGHT", claudeBtn, "LEFT", -6, 0)
+  optBtn:SetScript("OnClick", function() ns.safe("options", ns.Options.Toggle) end)
+
   UI.SetMode("market")
 end
 

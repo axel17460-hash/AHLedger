@@ -212,17 +212,47 @@ local function build(id)
   return L
 end
 
+-- Version courte (hors HV par défaut) : HV ou PNJ, puis prix et tendance sur une ligne
+local function buildCompact(id)
+  local L = {}
+  local cmp = ns.Bags and ns.Bags.Compare(id)
+  if cmp then
+    local head = ns.Bags.CompareText(cmp)
+    local c = ns.Bags.COLORS[cmp.kind]
+    L[#L + 1] = { head, r = c[1], g = c[2], b = c[3] }
+  end
+  local s = ns.Analysis.Get(id)
+  local price = s and (s.minNow or s.realPrice or s.avg7)
+  if price then
+    local t = s.trend24 or s.trend
+    L[#L + 1] = { "HV /u", ns.money(price) .. (t and ("  " .. trendText(t, " /j")) or "") }
+  end
+  return L
+end
+
 local function addLines(tooltip, id)
   if not id or not AHLedgerDB then return end
+  local mode = ns.Options.TooltipMode()
+  local shiftHint = mode ~= "full" and ns.Options.Get("ttShift")
+  if mode == "off" then return end
   local now = GetTime and GetTime() or time()
-  local c = cache[id]
+  local key = mode .. ":" .. id
+  local c = cache[key]
   if not (c and c.ver == ns.dataVersion and now - c.t < 3) then
-    c = { t = now, ver = ns.dataVersion, lines = build(id) }
-    cache[id] = c
+    c = { t = now, ver = ns.dataVersion, lines = mode == "compact" and buildCompact(id) or build(id) }
+    cache[key] = c
   end
   if #c.lines == 0 then return end
-  tooltip:AddLine(" ")
-  tooltip:AddLine("|cff33ccffAHLedger|r")
+  if mode == "compact" then
+    if shiftHint then
+      tooltip:AddDoubleLine("|cff33ccffAHLedger|r", "Maj : détails", 1, 1, 1, 0.5, 0.5, 0.5)
+    else
+      tooltip:AddLine("|cff33ccffAHLedger|r")
+    end
+  else
+    tooltip:AddLine(" ")
+    tooltip:AddLine("|cff33ccffAHLedger|r")
+  end
   for _, l in ipairs(c.lines) do
     if l.color then
       tooltip:AddLine(l[1], l.color[1], l.color[2], l.color[3])

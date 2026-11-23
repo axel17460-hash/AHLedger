@@ -29,7 +29,8 @@ Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l
   - **Revente PNJ** : les enchères affichées moins cher que ce que le marchand en donne, repérées au dernier scan. Il y a deux types : achat immédiat, et enchère qui se termine dans moins de 2 h. Clique sur une ligne pour lancer la recherche de l'objet dans l'onglet « Parcourir » ; l'achat reste manuel.
 - Pendant que tu navigues normalement à l'HV, une alerte apparaît dans le chat dès qu'une page affichée contient une affaire à revendre au PNJ.
 - Le prix de rachat PNJ vient du client lui-même : c'est le 11e retour de `GetItemInfo` (sellPrice), la même source qu'Auctionator. Si un objet n'est pas encore dans le cache du client, l'addon le complète à la réception de `GET_ITEM_INFO_RECEIVED`. Les prix d'achat chez les PNJ, eux, ne sont relevés que quand tu ouvres un marchand.
-- Les tooltips d'objets affichent le prix, la tendance, les ventes par jour et les signaux.
+- Les tooltips d'objets affichent le prix, la tendance, les ventes par jour et les signaux. Hors de l'HV, l'infobulle est courte par défaut (HV ou PNJ, prix et tendance) ; Maj (Shift) enfoncée affiche le détail complet.
+- **Options** : `/ahl options`, le bouton **Options** de la fenêtre, ou la page « AHLedger » des options d'interface du jeu. Infobulle hors HV (courte / complète / rien), à l'HV (complète / courte), Maj pour le détail, pastilles des sacs, scans bruts. Enregistrées dans `AHLedgerDB.opt`.
 - **HV ou PNJ ?** En tête du tooltip, et en pastille sur les cases des sacs et de la banque de Daylight UI tant que l'HV est ouverte : vert = l'HV rapporte plus de 10 % de plus que le marchand (net de commission et de dépôts, d'après le dernier scan), jaune = à ±10 % près (le PNJ est plus simple), rouge = au PNJ. Rien sur les objets liés ni sans marché HV observé. Colonne « HV/PNJ » dans l'onglet Mes objets. Seuil : `ns.Bags.SAME_BAND`.
 - **Clic sur une ligne, HV ouverte** : l'objet s'affiche à l'achat. Avec Daylight UI, c'est son onglet Acheter (AHLedger remplit la case de recherche du jeu, que Daylight UI surveille comme pour un Maj-clic sur un objet des sacs) ; sinon la recherche d'Auctionator, sinon l'onglet Acheter du jeu. Maj-clic met le lien dans le chat. AHLedger n'achète rien lui-même : tu choisis l'enchère et tu confirmes dans l'écran d'achat (règles Blizzard, et pas d'achat par erreur depuis une liste d'analyse).
 
@@ -82,7 +83,7 @@ Un addon ne peut pas communiquer avec l'extérieur. AHLedger prépare donc un ra
 - Les seuils de dépeçage des cuirs et écailles (`Professions.lua`) sont approximatifs.
 
 ## Commandes
-`/ahl` · `/ahl scan` · `/ahl status` · `/ahl metiers` · `/ahl bilan` · `/ahl claude` · `/ahl diag` · `/ahl monter <métier> [niveau]` · `/ahl farm start|stop` · `/ahl raw on|off` (snapshots bruts pour l'export Python) · `/ahl prune <n>`
+`/ahl` · `/ahl options` · `/ahl scan` · `/ahl status` · `/ahl metiers` · `/ahl bilan` · `/ahl claude` · `/ahl diag` · `/ahl monter <métier> [niveau]` · `/ahl farm start|stop` · `/ahl raw on|off` (snapshots bruts pour l'export Python) · `/ahl prune <n>`
 
 ## Export Python (optionnel)
 ```
