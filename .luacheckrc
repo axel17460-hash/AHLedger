@@ -28,4 +28,5 @@ read_globals = {
   "GetTradeSkillNumReagents", "GetTradeSkillReagentInfo", "GetTradeSkillReagentItemLink", "C_TradeSkillUI",
   "LOOT_ITEM_SELF", "LOOT_ITEM_SELF_MULTIPLE", "LOOT_ITEM_PUSHED_SELF", "LOOT_ITEM_PUSHED_SELF_MULTIPLE",
   "GetLootSlotLink", "GetNumLootItems", "GetLootSlotInfo",
+  "DaylightUI", "C_AddOns", "IsAddOnLoaded",
 }

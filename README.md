@@ -25,6 +25,13 @@ Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l
 - Le prix de rachat PNJ vient du client lui-même : c'est le 11e retour de `GetItemInfo` (sellPrice), la même source qu'Auctionator. Si un objet n'est pas encore dans le cache du client, l'addon le complète à la réception de `GET_ITEM_INFO_RECEIVED`. Les prix d'achat chez les PNJ, eux, ne sont relevés que quand tu ouvres un marchand.
 - Les tooltips d'objets affichent le prix, la tendance, les ventes par jour et les signaux.
 
+## Daylight UI
+- Avec Daylight UI, les fenêtres d'AHLedger (analyse et rapport) prennent son allure : coque de fenêtre, police, couleurs, accent et boutons choisis par le joueur. Tout passe par son API publique `DaylightUI.API` (`Look.lua`) ; sans Daylight UI, ce sont les modèles du jeu.
+- DaylightUI_AuctionHouse remplace la fenêtre HV du jeu, qui reste ouverte mais invisible. AHLedger ajoute donc un onglet **AHLedger** à côté d'Acheter / Vendre / Mes enchères, dans la fenêtre HV de Daylight UI : pas besoin de repasser par la fenêtre du jeu. Daylight UI n'a pas d'appel public pour ajouter un onglet à son HV : AHLedger passe par `me.Wrap` / `me.Hook` sur les fonctions de son module, la voie que son API.md prévoit, mais sans garantie d'une version à l'autre.
+- Si une mise à jour de Daylight UI casse cet onglet, AHLedger affiche à la place un bouton **AHLedger** tant que l'HV est ouverte. Place-le avec `/dui unlock` (« AHLedger (HV) »).
+- `/ahl` ressort le contenu dans la fenêtre d'AHLedger ; il revient dans l'onglet au prochain clic dessus.
+- Un scan complet lancé depuis l'HV de Daylight UI est lu par AHLedger, comme ceux d'Auctionator.
+
 ## Conseils de Claude
 Un addon ne peut pas communiquer avec l'extérieur. AHLedger prépare donc un rapport texte de tout ce qu'il sait : marché, tendances, flips, artisanat, sacs, bilan réel, métiers et zones de farm.
 - **En jeu** : `/ahl claude`, ou le bouton **Rapport Claude** de la fenêtre. Le texte est déjà sélectionné : Ctrl+C, puis colle-le dans une conversation avec Claude.
@@ -54,7 +61,7 @@ Un addon ne peut pas communiquer avec l'extérieur. AHLedger prépare donc un ra
   - `dépeçage` : ton niveau de dépeçage suffit pour récolter cet objet toi-même.
 - **Écoulé** : part des enchères vendues avant d'expirer sur 7 jours (avec un a priori de 2 sur 3 tant qu'il y a peu de données).
 - **Or/jour** : (prix − commission − dépôts perdus sur les remises en vente) × vendus/jour. Le dépôt est estimé à 15 % du prix PNJ par mise en vente (`Analysis.DEPOSIT_RATE`, à vérifier sur Forever).
-- **Score « à farmer »** : or/jour × (1 + 3 × tendance, borné entre 0,5 et 1,5) × signaux (pénurie ×1,2, demande ×1,1, afflux ×0,8, stock lourd ×0,75, dominé ×0,85).
+- **Score « à farmer »** : or/jour × (1 + 3 × tendance, borné entre 0,5 et 1,5) × signaux (pénurie ×1,2, demande ×1,1, afflux ×0,8, stock lourd ×0,75, dominé ×0,85). Le tout est pondéré par la confiance dans le volume, v / (v + 3) où v = unités vues vendues : une seule vente observée ne place plus un objet en tête.
 
 ## Métiers
 - **Montée de niveau** : dans l'onglet Artisanat, le bouton **Vue : montée de niveau** classe tes recettes par coût d'un point de compétence : (composants − revente) ÷ chance de gain. Un coût négatif veut dire que tu montes en gagnant de l'or.
@@ -83,7 +90,9 @@ python tools/ahledger.py brief ".../SavedVariables/AHLedger.lua" --out rapport.m
 ## Notes Forever (vérifiées en jeu le 22/11/2026)
 - Forever n'a **pas** l'API d'HV Classic (`QueryAuctionItems` absent) : il utilise l'API Retail `C_AuctionHouse` (scan complet par `ReplicateItems`).
 - **Intégration Auctionator** (Bridge.lua) : AHLedger s'abonne à l'événement interne `replicate_scan_complete` d'Auctionator, qui transmet toutes les enchères avec leur temps restant. Le bouton de scan d'AHLedger déclenche le scan d'Auctionator : un seul scan et un seul délai de 15 min pour les deux addons.
-- Tant qu'AHLedger a moins de 3 jours de scans, les tendances viennent de l'historique de prix d'Auctionator (`Auctionator.Database`, jusqu'à ~21 jours).
+- Tant qu'AHLedger a moins de 3 jours de scans, les tendances viennent de l'historique de prix d'Auctionator (`Auctionator.Database`, jusqu'à ~21 jours). Il faut au moins 3 jours de prix sur 2 jours d'écart ; la pente est robuste (Theil-Sen, médiane des pentes entre paires de jours), pour qu'une enchère aberrante ne fasse pas exploser la tendance.
+- Forever ne transmet pas le nom des vendeurs : la colonne « vendeurs » affiche « - » et le signal « dominé » ne se déclenche pas.
+- Les noms d'objets manquants (pas encore dans le cache du client) sont redemandés au serveur à chaque connexion, 100 par seconde.
 - Sans Auctionator, AHLedger fait son propre scan via `C_AuctionHouse.ReplicateItems`.
 - L'alerte en direct pendant la navigation ne marche qu'avec l'API Classic ; sur Forever, la détection passe par les scans complets. Cliquer sur une ligne de l'onglet Revente PNJ lance la recherche via l'API publique d'Auctionator (`MultiSearch`).
 - Reste à vérifier : le taux de la commission HV (`Analysis.AH_CUT`).

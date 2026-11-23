@@ -121,7 +121,16 @@ SlashCmdList = {}
 -- Marché simulé : chaque heure, des ventes (les moins chères partent),
 -- des expirations et de nouvelles mises en vente.
 ------------------------------------------------------------------------
-math.randomseed(7)
+-- Générateur portable (Park-Miller) : le rand() de la libc, utilisé par math.random,
+-- ne donne pas la même suite sous Windows et sous Linux, ce qui changeait le marché simulé.
+local seed = 7
+math.random = function(a, b)
+  seed = (seed * 16807) % 2147483647
+  local r = (seed - 1) / 2147483646
+  if not a then return r end
+  if not b then a, b = 1, a end
+  return a + math.floor(r * (b - a + 1))
+end
 MARKET = {
   -- base: prix/unité jour 0, drift: variation /jour, sell: unités vendues /h, post: unités postées /h (fonction du jour)
   { id = 2589, base = 100,  drift = 0,     sell = 40, post = function(d) return 40 end, stack = 20 },

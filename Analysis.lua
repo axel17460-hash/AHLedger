@@ -41,6 +41,28 @@ local function slope2(pts)
   return slope(pts)
 end
 
+-- Pente robuste (Theil-Sen) : médiane des pentes entre toutes les paires de points.
+-- Une seule enchère aberrante (pile à 1 pc, ou à 1000 po) ne fait plus exploser la tendance.
+-- Exige au moins 3 points répartis sur au moins minSpan jours.
+local function robustSlope(pts, minSpan)
+  if #pts < 3 then return nil end
+  local lo, hi = math.huge, -math.huge
+  for _, p in ipairs(pts) do lo, hi = math.min(lo, p[1]), math.max(hi, p[1]) end
+  if hi - lo < (minSpan or 0) then return nil end
+  local s = {}
+  for i = 1, #pts - 1 do
+    for j = i + 1, #pts do
+      local dx = pts[j][1] - pts[i][1]
+      if dx ~= 0 then s[#s + 1] = (pts[j][2] - pts[i][2]) / dx end
+    end
+  end
+  if #s == 0 then return nil end
+  table.sort(s)
+  local m = (#s + 1) / 2
+  return (s[math.floor(m)] + s[math.ceil(m)]) / 2
+end
+Analysis.robustSlope = robustSlope
+
 -- Tendance courte : régression sur les scans des dernières 24 h (%/jour), et variation sur la période
 function Analysis.ShortTrend(db, id, now)
   local pts, first, last = {}, nil, nil
@@ -101,12 +123,17 @@ function Analysis.ItemStats(db, id, today)
   if not priceNow or priceDay < today - 3 then return nil end -- objet absent récemment
 
   local s = { id = id, listPrice = priceNow, days = days, obsHours = w.obs / 3600 }
-  if w.sold >= Analysis.MIN_SOLD_FOR_REAL then s.realPrice = w.val / w.sold end
+  -- Prix réel de vente : valeur des enchères disparues / unités. Une enchère très chère annulée (ou
+  -- achetée) le fausse : hors de 0,4 à 1,5 fois le prix affiché, on garde le prix affiché.
+  if w.sold >= Analysis.MIN_SOLD_FOR_REAL then
+    local rp = w.val / w.sold
+    if rp >= 0.4 * priceNow and rp <= 1.5 * priceNow then s.realPrice = rp end
+  end
   s.price = s.realPrice or priceNow
   s.perDay = w.obs > 0 and (w.sold + 0.5 * w.amb) / w.obs * 86400 or nil
   s.stock = recent.qn > 0 and recent.q / recent.qn or nil
 
-  local b = slope(pts)
+  local b = robustSlope(pts, 2)
   s.trend = b and (math.exp(b) - 1) or nil          -- variation de prix par jour (0.04 = +4 %/j)
 
   -- Pas encore 3 jours de données AHLedger : on s'appuie sur l'historique d'Auctionator
@@ -120,7 +147,9 @@ function Analysis.ItemStats(db, id, today)
           if e[1] > -3 then rq, rn = rq + e[3], rn + 1 elseif e[1] > -10 then pq, pn = pq + e[3], pn + 1 end
         end
       end
-      local ab = #apts >= 2 and slope2(apts) or nil
+      -- au moins 4 jours d'Auctionator sur 3 jours d'écart, pente robuste : ses prix du jour sont des
+      -- minimums (une seule enchère bradée suffit), 2 ou 3 points donnaient +190 à +13 000 %/j
+      local ab = #apts >= 4 and robustSlope(apts, 3) or nil
       if ab then s.trend = math.exp(ab) - 1; s.trendSrc = "Auctionator" end
       if not s.stockChg and rn > 0 and pn > 0 and pq > 0 then s.stockChg = (rq / rn) / (pq / pn) - 1 end
     end
@@ -187,8 +216,12 @@ function Analysis.ItemStats(db, id, today)
   if s.obsHours < 6 then sig[#sig + 1] = "peu de données" end
   s.signals = sig
 
+  -- Confiance dans le volume : une seule vente vue en 5 h ne vaut pas « 5 vendus/j ».
+  -- Les ventes observées (ambiguës pour moitié) pèsent v / (v + 3) : 1 vente → 25 %, 12 → 80 %.
+  local seen = w.sold + 0.5 * w.amb
+  s.confidence = seen / (seen + 3)
   -- Score "à farmer" : or/jour, boosté si le prix monte ou si le stock s'assèche
-  s.score = s.gpd * clamp(1 + 3 * (s.trend or 0), 0.5, 1.5) * mult
+  s.score = s.gpd * clamp(1 + 3 * (s.trend or 0), 0.5, 1.5) * mult * s.confidence
   return s
 end
 

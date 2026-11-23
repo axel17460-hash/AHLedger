@@ -126,16 +126,36 @@ function ns.rememberItem(itemId, name)
     meta = {}
     AHLedgerDB.items[itemId] = meta
   end
-  if name and not meta.n then meta.n = name end
-  if not meta.s then
+  -- "" est vrai en Lua : l'API Retail renvoie un nom vide tant que l'objet n'est pas en cache,
+  -- on ne le stocke jamais (sinon le nom reste vide pour toujours)
+  if name and name ~= "" and not meta.n then meta.n = name end
+  if not meta.s or not meta.n then
     local iname, _, quality, _, _, _, _, _, _, _, sellPrice, classID = ns.GetItemInfo(itemId)
-    if sellPrice then
+    if sellPrice and not meta.s then
       meta.s = sellPrice
       meta.q = quality
       meta.c = classID
-      if iname and not meta.n then meta.n = iname end
     end
+    if iname and iname ~= "" and not meta.n then meta.n = iname end
   end
+end
+
+-- Noms manquants (anciennes données ou objets pas encore en cache) : on les redemande au serveur
+-- par paquets de 100 par seconde ; GET_ITEM_INFO_RECEIVED complète la base quand il répond.
+function ns.FillMissingNames()
+  local missing = {}
+  for id, meta in pairs(AHLedgerDB.items) do
+    if meta.n == "" then meta.n = nil end
+    if not meta.n and type(id) == "number" then missing[#missing + 1] = id end
+  end
+  local i = 1
+  local function batch()
+    for j = i, math.min(i + 99, #missing) do ns.rememberItem(missing[j]) end
+    i = i + 100
+    if i <= #missing then C_Timer.After(1, batch) end
+  end
+  if #missing > 0 then C_Timer.After(2, batch) end
+  return #missing
 end
 
 -- 123456 -> "12|cffffd700g|r 34|cffc7c7cfs|r 56|cffeda55fc|r"
@@ -165,7 +185,7 @@ end
 -- GetItemInfo renvoie nil tant que l'objet n'est pas dans le cache du client :
 -- on complète les métadonnées (dont le prix de rachat PNJ) quand le serveur répond.
 ns.on("GET_ITEM_INFO_RECEIVED", function(itemId, success)
-  if success and AHLedgerDB and AHLedgerDB.items and AHLedgerDB.items[itemId] then
+  if success ~= false and AHLedgerDB and AHLedgerDB.items and AHLedgerDB.items[itemId] then
     ns.rememberItem(itemId)
   end
 end)
@@ -180,6 +200,7 @@ ns.on("ADDON_LOADED", function(name)
   AHLedgerDB.realms = AHLedgerDB.realms or {}
   AHLedgerDB.items = AHLedgerDB.items or {}
   ns.dataVersion = 1
+  ns.FillMissingNames()
   if ns.onLoad then ns.onLoad() end
   C_Timer.After(5, function()
     ns.print("chargé : onglet « AHLedger » dans l'hôtel des ventes, ou /ahl. Les scans complets d'Auctionator sont lus automatiquement.")

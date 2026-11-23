@@ -73,9 +73,12 @@ function Export.Build()
   end
 
   local moving = {}
-  for _, s in ipairs(market) do if s.trend then moving[#moving + 1] = { s = s, abs = math.abs(s.trend) } end end
+  for _, s in ipairs(market) do
+    if s.trend and (s.confidence or 0) >= 0.5 then moving[#moving + 1] = { s = s, abs = math.abs(s.trend) } end
+  end
   add("")
   add("## Plus fortes variations de prix (marchés liquides)")
+  if #moving == 0 then add("pas encore de tendance fiable (il faut 3 jours de prix)") end
   for _, m in ipairs(sorted(moving, "abs", Export.TOP.rising)) do
     local s = m.s
     add("%s : %s/j sur 7 j, %s sur 24 h, prix %s, %s vendus/j", nameOf(s.id, s), pct(s.trend), pct(s.trend24), g(s.price), num(s.perDay))
@@ -178,27 +181,39 @@ function Export.Show()
   AHLedgerDB.brief = { t = time(), realm = ns.realmKey(), text = text }
   local f = Export.frame
   if not f then
-    f = CreateFrame("Frame", "AHLedgerExportFrame", UIParent, "BasicFrameTemplateWithInset")
+    local Look = ns.Look
+    local T = Look.Top()
+    f = Look.Window("AHLedgerExportFrame", 640, 460, "DIALOG")
     Export.frame = f
-    f:SetSize(640, 460)
-    f:SetPoint("CENTER")
-    f:SetFrameStrata("DIALOG")
-    f:SetMovable(true)
-    f:EnableMouse(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", f.StopMovingOrSizing)
-    if UISpecialFrames then table.insert(UISpecialFrames, "AHLedgerExportFrame") end
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    title:SetPoint("TOP", 0, -6)
-    title:SetText("AHLedger — rapport pour Claude : Ctrl+C puis colle-le dans Claude")
-    local sf = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
-    sf:SetPoint("TOPLEFT", 12, -30)
-    sf:SetPoint("BOTTOMRIGHT", -32, 12)
+    f.titleText:SetText("AHLedger — rapport pour Claude : Ctrl+C puis colle-le dans Claude")
+    local sf
+    if Look.Daylight() then
+      -- zone de texte un ton plus sombre, défilement à la molette (pas de barre du jeu)
+      local box = CreateFrame("Frame", nil, f)
+      box:SetPoint("TOPLEFT", 12, -30 - T)
+      box:SetPoint("BOTTOMRIGHT", -12, 12)
+      Look.Inset(box)
+      sf = CreateFrame("ScrollFrame", nil, box)
+      sf:SetPoint("TOPLEFT", 8, -8)
+      sf:SetPoint("BOTTOMRIGHT", -8, 8)
+      sf:EnableMouseWheel(true)
+      sf:SetScript("OnMouseWheel", function(self, delta)
+        local y = self:GetVerticalScroll() - delta * 40
+        self:SetVerticalScroll(math.max(0, math.min(y, self:GetVerticalScrollRange())))
+      end)
+    else
+      sf = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
+      sf:SetPoint("TOPLEFT", 12, -30)
+      sf:SetPoint("BOTTOMRIGHT", -32, 12)
+    end
     local eb = CreateFrame("EditBox", nil, sf)
     eb:SetMultiLine(true)
     eb:SetMaxLetters(0)
     eb:SetFontObject(ChatFontNormal)
+    if Look.Daylight() then
+      local font = Look.API().Font and Look.API().Font()
+      if font then eb:SetFont(font, 12, "") end
+    end
     eb:SetWidth(590)
     eb:SetAutoFocus(true)
     eb:SetScript("OnEscapePressed", function() f:Hide() end)

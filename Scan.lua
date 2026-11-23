@@ -207,7 +207,8 @@ function Scan.UnpackBook(str)
   if not sellers then return nil end
   local levels = {}
   for p, q in rest:gmatch("(%d+):(%d+)") do levels[#levels + 1] = { tonumber(p), tonumber(q) } end
-  return { sellers = tonumber(sellers), top = tonumber(top) / 1000, levels = levels }
+  sellers = tonumber(sellers)
+  return { sellers = sellers > 0 and sellers or nil, top = sellers > 0 and tonumber(top) / 1000 or nil, levels = levels }
 end
 
 function Scan.RecentlyDone()
@@ -385,11 +386,15 @@ function Scan.Finish()
     local d = diff and diff[id]
     local med = weightedPercentile(it.prices, 0.5)
     if items[id] then stats[id] = { med = med, q = it.q } end
-    -- structure du marché : nombre de vendeurs et part du plus gros (en ‰ des unités)
+    -- structure du marché : nombre de vendeurs et part du plus gros (en ‰ des unités).
+    -- Forever ne transmet pas le nom des vendeurs (comme le Retail moderne) : vendeur inconnu
+    -- = non compté, et 0 vendeur connu = structure du marché inconnue.
     local sellers, top = 0, 0
-    for _, q in pairs(it.owners or {}) do
-      sellers = sellers + 1
-      if q > top then top = q end
+    for owner, q in pairs(it.owners or {}) do
+      if owner ~= "?" and owner ~= "" then
+        sellers = sellers + 1
+        if q > top then top = q end
+      end
     end
     if items[id] and it.q > 0 then db.book[id] = Scan.PackBook(it.prices, sellers, math.floor(top * 1000 / it.q)) end
     packed[id] = table.concat({

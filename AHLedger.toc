@@ -4,10 +4,12 @@
 ## Author: Axel
 ## Version: 0.8.0
 ## SavedVariables: AHLedgerDB
+## OptionalDeps: Auctionator, DaylightUI, DaylightUI_AuctionHouse
 
 # 16001 = WoW Forever 1.60 (même valeur qu'Auctionator)
 
 Core.lua
+Look.lua
 History.lua
 Analysis.lua
 Scan.lua

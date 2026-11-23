@@ -1,16 +1,20 @@
 """Test hors jeu : simule 14 jours de marché, scanne 6 fois par soir, puis vérifie l'analyse et l'interface."""
 import re, subprocess, sys
 from pathlib import Path
+# Console Windows (cp1252) : on force l'UTF-8 pour les accents et les flèches
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        _s.reconfigure(encoding="utf-8", errors="replace")
 import lupa.lua51 as lupa
 
 ROOT = Path(__file__).resolve().parent.parent
 lua = lupa.LuaRuntime(unpack_returned_tuples=True)
-lua.execute((Path(__file__).parent / "harness.lua").read_text())
+lua.execute((Path(__file__).parent / "harness.lua").read_text(encoding="utf-8"))
 
 ns = lua.table()
-toc = (ROOT / "AHLedger.toc").read_text()
+toc = (ROOT / "AHLedger.toc").read_text(encoding="utf-8")
 for f in [l.strip() for l in toc.splitlines() if l.strip().endswith(".lua")]:
-    res = lua.eval("function(src, name) return loadstring(src, name) end")((ROOT / f).read_text(), f)
+    res = lua.eval("function(src, name) return loadstring(src, name) end")((ROOT / f).read_text(encoding="utf-8"), f)
     chunk, err = res if isinstance(res, tuple) else (res, None)
     if chunk is None:
         sys.exit(f"Erreur de syntaxe : {err}")
@@ -202,7 +206,7 @@ tabs.AHLedger.scripts.OnShow(tabs.AHLedger)
 logs = [strip(m) for m in lua.eval("LOG").values()]
 print(logs[-1])
 assert sum("Scan Auctionator terminé" in m for m in logs) == 2, logs[-5:]
-assert ns.UI.embedded == True
+assert ns.UI.embedded is not None and ns.UI.embedded is not False
 
 # Tooltip : tendance 24 h issue des scans récents
 lua.execute("""
@@ -268,13 +272,13 @@ assert "|c" not in report and len(report) < 20000
 
 # Export + script Python
 sv = Path(__file__).parent / "AHLedger.lua"
-sv.write_text(lua.eval("serializeDB")())
+sv.write_text(lua.eval("serializeDB")(), encoding="utf-8")
 tool = ROOT / "tools" / "ahledger.py"
 db = tool.with_name("ahledger.sqlite")
 db.unlink(missing_ok=True)
 subprocess.run([sys.executable, str(tool), "import", str(sv)], check=True, stdout=subprocess.DEVNULL)
 subprocess.run([sys.executable, str(tool), "report", "--top", "3"], check=True)
-brief = subprocess.run([sys.executable, str(tool), "brief", str(sv)], check=True, capture_output=True, text=True).stdout
+brief = subprocess.run([sys.executable, str(tool), "brief", str(sv)], check=True, capture_output=True, text=True, encoding="utf-8").stdout
 assert "## Flips HV" in brief and "Mageweave Cloth" in brief
 import tempfile
 with tempfile.TemporaryDirectory() as d:
@@ -282,4 +286,108 @@ with tempfile.TemporaryDirectory() as d:
     assert (Path(d) / "rapport.md").read_text(encoding="utf-8") == brief.rstrip("\n")
     assert len(list((Path(d) / "historique").glob("rapport-*.md"))) == 1
 db.unlink(); sv.unlink()
+
+# Noms vides (API Retail, objet pas encore en cache) : jamais stockés, redemandés ensuite
+names =lua.eval("""function(ns)
+  local real = ns.GetItemInfo
+  local cached = false
+  ns.GetItemInfo = function(id) if id == 99001 and cached then return "Objet test", nil, 1, nil, nil, nil, nil, nil, nil, nil, 50, 7 end end
+  ns.rememberItem(99001, "")
+  local before = AHLedgerDB.items[99001].n
+  AHLedgerDB.items[99002] = { n = "", s = 10 }          -- ancienne donnée abîmée
+  cached = true
+  local missing = ns.FillMissingNames()
+  runTimers()
+  ns.GetItemInfo = real
+  return before, AHLedgerDB.items[99001].n, AHLedgerDB.items[99001].s, AHLedgerDB.items[99002].n, missing
+end""")(ns)
+assert names[0] is None and names[1] == "Objet test" and names[2] == 50, names
+assert names[3] is None and names[4] >= 2, names  # "" effacé ; 99002 inconnu du mock, reste sans nom
+
+# Vendeurs inconnus (Forever ne donne pas les noms) : structure du marché inconnue, pas « 1 vendeur à 100 % »
+book = ns.Scan.UnpackBook("0,0|100:5;120:3")
+assert book.sellers is None and book.top is None and len(list(book.levels.values())) == 2
+
+# Tendance robuste : 2 points refusés, une enchère aberrante ne fait pas exploser la pente
+rs = ns.Analysis.robustSlope
+assert rs(lua.eval("{ {-1, 0}, {0, 5} }"), 2) is None
+b = rs(lua.eval("{ {-6, 1.0}, {-5, 1.01}, {-4, 1.02}, {-3, 6.0}, {-2, 1.04}, {-1, 1.05}, {0, 1.06} }"), 2)
+assert b is not None and abs(b - 0.01) < 0.005, b
+assert rs(lua.eval("{ {-0.5, 1}, {-0.2, 1.1}, {0, 1.2} }"), 2) is None  # moins de 2 jours d'écart
+
+# Prix réel de vente aberrant (enchère très chère disparue) : on garde le prix affiché
+real = lua.eval("""function(ns, soldVal)
+  local t = ns.History.today()
+  local db = { days = { [t] = { scans = 1, obs = 36000 } }, hist = { [99010] = { [t] = "1000,1,10,10,0," .. soldVal .. ",0" } },
+               book = {}, lastMin = {}, recent = {} }
+  local s = ns.Analysis.ItemStats(db, 99010, t)
+  return s.realPrice, s.price
+end""")
+assert real(ns, 9000) == (900, 900), real(ns, 9000)       # 90 % du prix affiché : prix réel retenu
+assert real(ns, 35000) == (None, 1000), real(ns, 35000)   # 3,5 fois le prix affiché : écarté
+# Daylight UI : fenêtres dressées par son API publique, onglet AHLedger dans sa fenêtre HV
+dl = lua.eval("""function(ns)
+  local calls = { skin = 0, close = 0 }
+  local Main = { TABS = { { id = "buy" }, { id = "sell" }, { id = "auctions" } } }
+  function Main.Build() Main.frame = { pages = { ahledger = CreateFrame() } }; Main.built = #Main.TABS end
+  function Main.ShowTab(id) Main.tab = id end
+  local me = {
+    RegisterMover = function() return true end,
+    Wrap = function(t, k, fn) local o = t[k]; t[k] = function(...) return fn(o, ...) end end,
+    Hook = function(t, k, fn) local o = t[k]; t[k] = function(...) local r = o(...); fn(...); return r end end,
+  }
+  DaylightUI = {
+    GetModule = function(_, name) if name == "AuctionHouse" then return { ns = { Window = Main } } end end,
+    API = {
+      major = 1, minor = 13,
+      Skin = function() calls.skin = calls.skin + 1 end,
+      Text = function() return mock() end,
+      Button = function(_, label) local b = CreateFrame(); b.text = mock(); b.text:SetText(label); return b end,
+      Close = function() calls.close = calls.close + 1; return mock() end,
+      Colors = function() return { TEXT = { 1, 1, 1 }, LABEL = { 0.8, 0.7, 0.5 } } end,
+      Accent = function() return 0.3, 0.6, 1 end,
+      Font = function() return "Fonts\\\\FRIZQT__.TTF" end,
+      For = function() return me end,
+    },
+  }
+  C_AddOns = { IsAddOnLoaded = function(name) return name == "DaylightUI_AuctionHouse" end }
+  ns.UI.frame, ns.UI.content, ns.Export.frame, ns.UI.embedded = nil, nil, nil, false
+  ns.UI.dlTried, ns.UI.dlTab, ns.Look.me = nil, nil, nil
+  local hooked = ns.UI.HookDaylightAH()
+  Main.Build()                                   -- Daylight UI construit sa fenêtre (PLAYER_LOGIN)
+  Main.ShowTab("ahledger")                       -- le joueur clique l'onglet AHLedger
+  local docked = ns.UI.embedded == Main.frame.pages.ahledger
+  Main.ShowTab("buy")
+  ns.UI.Toggle()                                 -- /ahl : le contenu ressort dans sa fenêtre
+  local alone = ns.UI.embedded == false and ns.UI.frame:IsShown()
+  fire("AUCTION_HOUSE_SHOW")
+  local noButton = ns.UI.ahButton == nil         -- l'onglet suffit, pas de bouton de repli
+  ns.Export.Show()
+  local label = ns.UI.modeButtons.market.text:GetText()
+  DaylightUI, C_AddOns = nil, nil
+  return hooked, Main.built, Main.TABS[4] and Main.TABS[4].id, docked, alone, noButton, calls.skin, calls.close, label
+end""")(ns)
+assert dl[0] is True and dl[1] == 4 and dl[2] == "ahledger", dl   # onglet ajouté avant la construction
+assert dl[3] and dl[4] and dl[5], dl
+assert dl[6] >= 3 and dl[7] == 2 and dl[8] == "Marché", dl         # 2 fenêtres + zone du rapport
+
+# Daylight UI sans module HV accessible : repli sur le bouton déplaçable
+fb = lua.eval("""function(ns)
+  local mover
+  DaylightUI = { API = { major = 1, Skin = function() end, Text = function() return mock() end,
+    Button = function() local b = CreateFrame(); b.text = mock(); return b end, Close = function() return mock() end,
+    Colors = function() return {} end, Accent = function() return 1, 1, 1 end,
+    For = function() return { RegisterMover = function(_, key) mover = key end } end } }
+  C_AddOns = { IsAddOnLoaded = function() return true end }
+  ns.UI.dlTried, ns.UI.dlTab, ns.UI.ahButton, ns.Look.me = nil, nil, nil, nil
+  local hooked = ns.UI.HookDaylightAH()
+  fire("AUCTION_HOUSE_SHOW")
+  local shown = ns.UI.ahButton and ns.UI.ahButton:IsShown()
+  fire("AUCTION_HOUSE_CLOSED")
+  local hidden = not ns.UI.ahButton:IsShown()
+  DaylightUI, C_AddOns = nil, nil
+  return hooked, shown, hidden, mover
+end""")(ns)
+assert fb[0] is False and fb[1] and fb[2] and fb[3] == "ahbutton", fb
+
 print("\nOK : tous les tests passent.")

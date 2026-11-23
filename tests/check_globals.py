@@ -9,6 +9,10 @@ Usage : python tests/check_globals.py   (pip install luaparser)
 import re
 import sys
 from pathlib import Path
+# Console Windows (cp1252) : on force l'UTF-8 pour les accents et les flèches
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        _s.reconfigure(encoding="utf-8", errors="replace")
 
 from luaparser import ast, astnodes as N
 
