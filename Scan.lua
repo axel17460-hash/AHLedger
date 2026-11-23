@@ -429,6 +429,7 @@ function Scan.Finish()
   ns.print(("Scan %sterminé : %d enchères lues%s. /ahl pour voir le classement.")
     :format(Scan.source == "Auctionator" and "Auctionator " or "", #rows, diff and (", comparées au scan d'il y a " .. math.floor(gap / 60) .. " min") or ""))
   if ns.UI then ns.UI.OnData() end
+  if ns.Export then ns.safe("rapport", ns.Export.Save) end -- toujours à jour dans les SavedVariables
 end
 
 ns.on("AUCTION_HOUSE_CLOSED", function()

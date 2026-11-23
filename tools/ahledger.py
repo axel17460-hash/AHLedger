@@ -4,6 +4,8 @@
 Usage :
   python ahledger.py import "<WoW>/_forever_/WTF/Account/<COMPTE>/SavedVariables/AHLedger.lua"
   python ahledger.py report [--realm "Royaume-Horde"] [--days 7]
+  python ahledger.py brief  "<...>/SavedVariables/AHLedger.lua" [--out rapport.md]
+      (rapport pour Claude, enregistré par l'addon après chaque scan et à la déconnexion)
 
 Rien ici ne touche au jeu : le script lit uniquement le fichier écrit par le client
 au /reload ou à la déconnexion (comme le font TSM ou les gestionnaires d'addons).
@@ -282,6 +284,19 @@ def cmd_report(realm, days, top):
         print("(aucune session — /ahl farm start puis /ahl farm stop en jeu)")
 
 
+def cmd_brief(path, out):
+    data = LuaParser(Path(path).read_text(encoding="utf-8")).parse_file().get("AHLedgerDB") or {}
+    brief = data.get("brief")
+    if not brief or not brief.get("text"):
+        sys.exit("Pas encore de rapport : fais un scan en jeu (ou /ahl claude), puis /reload.")
+    text = brief["text"]
+    if out:
+        Path(out).write_text(text, encoding="utf-8")
+        print(f"Rapport écrit dans {out} ({len(text)} caractères).")
+    else:
+        print(text)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -291,8 +306,13 @@ def main():
     p.add_argument("--realm")
     p.add_argument("--days", type=int, default=7)
     p.add_argument("--top", type=int, default=15)
+    p = sub.add_parser("brief")
+    p.add_argument("file")
+    p.add_argument("--out")
     args = ap.parse_args()
-    if args.cmd == "import":
+    if args.cmd == "brief":
+        cmd_brief(args.file, args.out)
+    elif args.cmd == "import":
         cmd_import(args.file)
     else:
         cmd_report(args.realm, args.days, args.top)

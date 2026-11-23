@@ -1,4 +1,4 @@
-# AHLedger (v0.6)
+# AHLedger (v0.7)
 
 Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l'hôtel des ventes et suit les hausses et baisses de prix, pour savoir quoi farmer avant tout le monde. L'analyse se fait entièrement en jeu.
 
@@ -25,6 +25,11 @@ Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l
 - Le prix de rachat PNJ vient du client lui-même : c'est le 11e retour de `GetItemInfo` (sellPrice), la même source qu'Auctionator. Si un objet n'est pas encore dans le cache du client, l'addon le complète à la réception de `GET_ITEM_INFO_RECEIVED`. Les prix d'achat chez les PNJ, eux, ne sont relevés que quand tu ouvres un marchand.
 - Les tooltips d'objets affichent le prix, la tendance, les ventes par jour et les signaux.
 
+## Conseils de Claude
+Un addon ne peut pas communiquer avec l'extérieur. AHLedger prépare donc un rapport texte de tout ce qu'il sait : marché, tendances, flips, artisanat, sacs, bilan réel, métiers et zones de farm.
+- **En jeu** : `/ahl claude`, ou le bouton **Rapport Claude** de la fenêtre. Le texte est déjà sélectionné : Ctrl+C, puis colle-le dans une conversation avec Claude.
+- **Hors jeu** : le rapport est enregistré dans les SavedVariables après chaque scan et à la déconnexion. `python tools/ahledger.py brief ".../SavedVariables/AHLedger.lua" --out rapport.md` le ressort dans un fichier.
+
 ## Comment c'est calculé
 - **Prix** : le prix réel de vente, c'est-à-dire le prix des enchères disparues comme vendues, dès qu'au moins 5 unités ont été vues partir sur 7 jours. Avant ça, la médiane des prix affichés.
 - **Vendus/jour** : les unités disparues entre deux scans rapprochés, ramenées à 24 h. Une enchère compte comme vendue s'il lui restait plus de temps que l'écart entre les scans. Si elle était en « court », elle compte comme expirée. Les cas incertains comptent pour moitié.
@@ -50,12 +55,13 @@ Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l
 - Les seuils de dépeçage des cuirs et écailles (`Professions.lua`) sont approximatifs.
 
 ## Commandes
-`/ahl` · `/ahl scan` · `/ahl status` · `/ahl metiers` · `/ahl bilan` · `/ahl farm start|stop` · `/ahl raw on|off` (snapshots bruts pour l'export Python) · `/ahl prune <n>`
+`/ahl` · `/ahl scan` · `/ahl status` · `/ahl metiers` · `/ahl bilan` · `/ahl claude` · `/ahl farm start|stop` · `/ahl raw on|off` (snapshots bruts pour l'export Python) · `/ahl prune <n>`
 
 ## Export Python (optionnel)
 ```
 python tools/ahledger.py import ".../WTF/Account/<COMPTE>/SavedVariables/AHLedger.lua"
 python tools/ahledger.py report --days 7
+python tools/ahledger.py brief ".../SavedVariables/AHLedger.lua" --out rapport.md
 ```
 
 ## Tests hors jeu

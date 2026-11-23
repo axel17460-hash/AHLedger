@@ -232,6 +232,14 @@ ns.UI.SetMode("ledger"); print(strip(ns.UI.help.text))
 lua.execute("SlashCmdList.AHLEDGER('bilan')")
 print(strip(list(lua.eval("LOG").values())[-1]))
 
+# Rapport pour Claude : /ahl claude ouvre la fenêtre de copie et enregistre le rapport
+lua.execute("SlashCmdList.AHLEDGER('claude')")
+report = strip(lua.eval("AHLedgerDB.brief.text"))
+print("\n" + report + "\n")
+for section in ("## Marché", "## Flips HV", "## Artisanat", "## Mes objets", "## Bilan réel", "Métiers : Dépeçage 253/300"):
+    assert section in report, section
+assert "|c" not in report and len(report) < 20000
+
 # Export + script Python
 sv = Path(__file__).parent / "AHLedger.lua"
 sv.write_text(lua.eval("serializeDB")())
@@ -240,5 +248,7 @@ db = tool.with_name("ahledger.sqlite")
 db.unlink(missing_ok=True)
 subprocess.run([sys.executable, str(tool), "import", str(sv)], check=True, stdout=subprocess.DEVNULL)
 subprocess.run([sys.executable, str(tool), "report", "--top", "3"], check=True)
+brief = subprocess.run([sys.executable, str(tool), "brief", str(sv)], check=True, capture_output=True, text=True).stdout
+assert "## Flips HV" in brief and "Mageweave Cloth" in brief
 db.unlink(); sv.unlink()
 print("\nOK : tous les tests passent.")

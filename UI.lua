@@ -340,6 +340,12 @@ function UI.Build()
   scanBtn:SetText("Scanner l'HV")
   scanBtn:SetScript("OnClick", function() ns.safe("scan", ns.Scan.Start) end)
 
+  local claudeBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  claudeBtn:SetSize(120, 22)
+  claudeBtn:SetPoint("RIGHT", scanBtn, "LEFT", -6, 0)
+  claudeBtn:SetText("Rapport Claude")
+  claudeBtn:SetScript("OnClick", function() ns.safe("rapport", ns.Export.Show) end)
+
   UI.SetMode("market")
 end
 
