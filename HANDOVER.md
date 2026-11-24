@@ -22,6 +22,8 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 | `Analysis.lua` | Stats par objet : prix réel, vendus/j, tendances, écoulement, net de commission et de dépôt, concurrence, signaux, score. Aussi Flips HV, achat PNJ → HV, artisanat, zones de farm |
 | `Rebound.lua` | Creux de prix et rebonds par objet (taux, délai médian, meilleur jour de la semaine), appris chaque jour et gardés sans purge ; servent aux flips « à stocker » |
 | `Scan.lua` | Scan complet (Auctionator, Retail ou Classic), comparaison avec le scan précédent, carnet d'ordres compact `db.book` |
+| `Trust.lua` | Fiabilité d'un prix : ventes / expirations / annonces qui traînent au prix près (`db.outcomes`, date de 1re apparition `f` dans `lastSigs`), tes courriers ; plafond au plus haut prix vu vendu (`s.capped`), verdict `Trust.Check(s, prix)` → ok / test / bad |
+| `Opportunities.lua` | Onglets « Rentables » (recettes rentables, apprises ou non, avec accès et amorti) et « Sous-coter » (enchère la moins chère au-dessus du prix habituel) |
 | `Vendor.lua`, `Farm.lua`, `Snipe.lua` | Prix des marchands, sessions `/ahl farm`, enchères sous le prix PNJ |
 | `Professions.lua` | Niveaux de métier, recettes relevées à l'ouverture des fenêtres de métier (Classic et Retail), table des cuirs pour le dépeçage |
 | `Bags.lua` | Conseiller d'inventaire (sacs et banque) : vendre HV / garder / PNJ / attendre |
@@ -30,7 +32,7 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 | `RecipeDB.lua` | Fournisseurs de recettes (`RecipeDB.Register`) et planificateur de montée (`/ahl monter cuir 225`) |
 | `Export.lua` | Rapport texte pour Claude (`/ahl claude`), aussi sauvé dans `AHLedgerDB.brief` |
 | `Diag.lua` | `/ahl diag` : API présentes, variante utilisée, événements refusés, erreurs |
-| `Bridge.lua`, `Tooltip.lua`, `UI.lua` | Auctionator, tooltips, fenêtre à 8 onglets (aussi en onglet de l'HV via LibAHTab) |
+| `Bridge.lua`, `Tooltip.lua`, `UI.lua` | Auctionator, tooltips, fenêtre à 10 onglets (aussi en onglet de l'HV via LibAHTab) |
 | `tools/ahledger.py` | `import`, `report`, `brief`, `sync` (rapport vers Google Drive) ; `tools/sync_drive.bat` sous Windows |
 
 ## Hypothèses non vérifiées (à confirmer en jeu)
@@ -44,7 +46,7 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 1. **Premier test en jeu.** Installe ou mets à jour l'addon, `/reload`, puis `/ahl diag`. Corrige chaque ligne MANQUE et chaque erreur. Avec une session locale, lis directement :
    - le fichier `World of Warcraft\_forever_\WTF\Account\<COMPTE>\SavedVariables\AHLedger.lua`, écrit à `/reload` ou à la déconnexion. `AHLedgerDB.diag.lines` contient le diagnostic, `AHLedgerDB.brief.text` le rapport ;
    - le code d'Auctionator dans `Interface\AddOns\Auctionator`, pour vérifier les noms internes utilisés par `Bridge.lua` (`Auctionator.State.FullScanFrameRef`, `FullScan.Events.ScanComplete`, `Database.db`, `Constants.SCAN_DAY_0`, `API.v1.MultiSearch`).
-2. **Faire tourner chaque fonction une fois** : ouvrir les fenêtres de métier, la boîte aux lettres, la banque ; faire un scan ; parcourir les 8 onglets ; `/ahl monter cuir` ; `/ahl claude`.
+2. **Faire tourner chaque fonction une fois** : ouvrir les fenêtres de métier, la boîte aux lettres, la banque ; faire un scan ; parcourir les 10 onglets ; `/ahl monter cuir` ; `/ahl claude`.
 3. **Brancher un addon de recettes Forever.** Le joueur en choisit un (proposition : LibProfessionDB, fait pour être lu par d'autres addons ; autres pistes : Forever Recipes, Fabrikao!! Forever, My Forever Recipe Book). Lis sa structure de données dans `Interface\AddOns\<addon>` et écris un adaptateur `RecipeDB.Register(...)` au format décrit en tête de `RecipeDB.lua`. Seuils jaune/vert/gris → plan de montée complet ; source et prix des recettes → « recettes à apprendre ». Ajoute l'addon en `## OptionalDeps` du `.toc`.
 4. **Synchro Google Drive** : `tools\sync_drive.bat` (Python 3 et Google Drive pour ordinateur requis). Il écrit `Mon Drive/AHLedger/rapport.md`. Le dossier Drive `AHLedger` existe déjà, créé par la session cloud. Le connecteur Drive de Claude sert à lire ce rapport pour conseiller le joueur.
 5. **Idées validées, pas encore faites** :

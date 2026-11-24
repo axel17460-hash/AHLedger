@@ -104,11 +104,38 @@ function Bags.Advise(id, n)
     -- juste sous l'enchère la moins chère, sans dépasser le prix réel de vente de plus de 20 %
     local post = math.floor(s.minNow and (s.minNow - 1) or s.price)
     if post > s.price * 1.2 then post = math.floor(s.price * 1.2) end
-    e.action, e.post, e.unit = "Vendre HV", post, post * (1 - ns.Analysis.AH_CUT)
-    -- ne pas inonder le marché : environ une journée de ventes à la fois
-    e.postQty = s.perDay and math.max(1, math.min(n, math.ceil(s.perDay))) or n
-    e.why = s.perDay and ("~%.0f vendus/j"):format(s.perDay) or "volume inconnu"
-    if s.trend and s.trend <= -0.03 then e.why = e.why .. ", prix en baisse : vends vite" end
+    -- jamais au-dessus du plus haut prix vu vendu (Trust)
+    local level, trustWhy, maxSold, wanted = "ok", nil, nil, nil
+    if ns.Trust then
+      level, trustWhy, maxSold = ns.Trust.Check(s, post)
+      if level == "bad" and maxSold and post > maxSold then
+        wanted, post = post, math.floor(maxSold)
+        level, trustWhy = ns.Trust.Check(s, post)
+      end
+    end
+    local net = post * (1 - ns.Analysis.AH_CUT)
+    if level == "bad" and vsell > 0 and vsell >= net * 0.5 then
+      e.action, e.unit, e.why = "PNJ", vsell, "l'HV ne paie pas à ce prix (" .. trustWhy .. ") : le marchand paie tout de suite"
+    elseif level == "bad" then
+      e.action, e.unit = "Garder", net
+      e.why = ("%s : mets-en 1 seul à %s pour tester, ou utilise-le"):format(trustWhy, ns.money(post))
+    else
+      e.action, e.post, e.unit = "Vendre HV", post, net
+      -- ne pas inonder le marché : environ une journée de ventes à la fois ; à tester : 1 seul
+      e.postQty = s.perDay and math.max(1, math.min(n, math.ceil(s.perDay))) or n
+      e.why = s.perDay and ("~%.0f vendus/j"):format(s.perDay) or "volume inconnu"
+      if s.trend and s.trend <= -0.03 then e.why = e.why .. ", prix en baisse : vends vite" end
+      if wanted then
+        e.why = e.why .. (" · rien vu vendu au-dessus de %s (annoncé jusqu'à %s)"):format(ns.money(post), ns.money(s.listedPrice or wanted))
+      end
+      local own = s.ev and s.ev.own
+      if own and own.expired > 0 then e.why = e.why .. (" · %d expiré(s) chez toi"):format(own.expired) end
+      if level == "test" then
+        -- quelques unités pour voir si ça part (un peu plus sur un marché très actif)
+        e.postQty = math.min(e.postQty, (s.perDay or 0) >= 100 and 5 or 1)
+        e.why = e.why .. (" · à tester (%s) : %d d'abord"):format(trustWhy, e.postQty)
+      end
+    end
   end
   e.value = e.unit * n
   if e.value < Bags.MIN_VALUE then return nil end
@@ -140,12 +167,15 @@ function Bags.Compare(id)
   local vsell = meta and meta.s or 0
   local ah = math.max(s.netExp or 0, 0)
   local r = { ah = ah, vendor = vsell, s = s,
-              slow = s.perDay ~= nil and s.perDay < Bags.SLOW_PER_DAY, unsure = s.realPrice == nil }
+              slow = s.perDay ~= nil and s.perDay < Bags.SLOW_PER_DAY, unsure = s.trust ~= "ok",
+              trust = s.trust, trustWhy = s.trustWhy }
   if vsell <= 0 then
     r.kind = ah > 0 and "ah" or "vendor"
   else
     r.gain = ah / vsell - 1
     r.kind = (r.gain > Bags.SAME_BAND and "ah") or (r.gain < -Bags.SAME_BAND and "vendor") or "same"
+    -- prix non tenu : l'avantage de l'HV n'est pas prouvé, au mieux « pareil »
+    if r.trust == "bad" and r.kind == "ah" then r.kind = "same" end
   end
   return r
 end
@@ -162,7 +192,7 @@ function Bags.CompareText(c)
   else head = "Au PNJ, pas la peine à l'HV" .. pct end
   local warn = {}
   if c.slow then warn[#warn + 1] = ("se vend peu (~%.1f/j)"):format(c.s.perDay) end
-  if c.unsure then warn[#warn + 1] = "prix affiché, aucune vente vue" end
+  if c.unsure then warn[#warn + 1] = c.trustWhy or "prix affiché, aucune vente vue" end
   return head, prices .. (#warn > 0 and (" · " .. table.concat(warn, ", ")) or "")
 end
 

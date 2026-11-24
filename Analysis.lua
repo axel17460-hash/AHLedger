@@ -139,6 +139,14 @@ function Analysis.ItemStats(db, id, today)
     if rp >= 0.4 * priceNow and rp <= 1.5 * priceNow then s.realPrice = rp end
   end
   s.price = s.realPrice or priceNow
+  -- Prix affiché sans ventes pour le confirmer : on ne compte pas plus que le plus haut prix vu vendu
+  -- (scans, historique, tes courriers). Voir Trust.lua.
+  if ns.Trust then
+    s.ev = ns.Trust.Evidence(db, id, today)
+    if not s.realPrice and s.ev.maxSold and s.price > s.ev.maxSold then
+      s.listedPrice, s.price, s.capped = s.price, s.ev.maxSold, true
+    end
+  end
   s.perDay = w.obs > 0 and (w.sold + 0.5 * w.amb) / w.obs * 86400 or nil
   -- annulations et relistes écartées des ventes (Scan.Diff), pour le rapport et l'infobulle
   s.relistPerDay = w.obs > 0 and w.can > 0 and w.can / w.obs * 86400 or nil
@@ -231,6 +239,8 @@ function Analysis.ItemStats(db, id, today)
   -- Les ventes observées (ambiguës pour moitié) pèsent v / (v + 3) : 1 vente → 25 %, 12 → 80 %.
   local seen = w.sold + 0.5 * w.amb
   s.confidence = seen / (seen + 3)
+  if ns.Trust then s.trust, s.trustWhy = ns.Trust.Check(s, s.price) end
+  if s.trust == "bad" then sig[#sig + 1] = "prix non tenu"; mult = mult * 0.5 end
   -- Score "à farmer" : or/jour, boosté si le prix monte ou si le stock s'assèche
   s.score = s.gpd * clamp(1 + 3 * (s.trend or 0), 0.5, 1.5) * mult * s.confidence
   return s

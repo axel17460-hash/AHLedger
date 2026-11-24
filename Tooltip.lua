@@ -104,6 +104,10 @@ local function build(id)
     end
     if s.avg7 then kv("Prix affiché moyen 7 j /u", ns.money(s.avg7)) end
     kv("Prix réel de vente /u", s.realPrice and ns.money(s.realPrice) or "|cff808080trop peu de ventes vues|r")
+    if s.ev and s.ev.maxSold then
+      kv("Plus haut prix vu vendu /u", ns.money(s.ev.maxSold) .. (s.capped and ("  |cffff8040(affiché %s)|r"):format(ns.money(s.listedPrice)) or ""))
+    end
+    if s.trust then kv("Fiabilité du prix", ns.Trust.LABEL[s.trust] .. " · " .. (s.trustWhy or "")) end
     kv("Net /u (commission, dépôts)", ns.money(s.netExp))
     if meta and meta.s and meta.s > 0 then kv("Rachat par le PNJ /u", ns.money(meta.s)) end
   else

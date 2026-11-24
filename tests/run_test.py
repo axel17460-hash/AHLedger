@@ -1108,3 +1108,94 @@ assert tc[6] == "ko" and abs(tc[7] - (10 * 300 - 10 * 899 * (1 - cut))) < 1e-6, 
 assert tc[8] == "ok" and tc[9] == 0 and tc[10], tc                     # PNJ juste ; « Garder » pas suivi
 assert tc[11] == 2 and tc[12] == 0 and tc[13] == 2 and tc[14] == 1, tc
 print("OK : fiabilité de l'artisanat et des conseils des sacs")
+
+# Opportunités : recettes rentables (apprises ou non) et marchés où sous-coter
+opp = lua.eval("""function(ns)
+  local A = ns.Analysis
+  -- recette fictive très rentable, non apprise, dans un métier que le personnage n'a pas
+  local pick
+  for _, s in ipairs(A.All().list) do
+    if s.perDay and s.perDay >= 1 and s.realPrice and s.trust ~= "bad" and s.ev.maxSold and s.ev.maxSold >= 1.2 * s.price
+       and (not pick or s.price > pick.price) then pick = s end
+  end
+  local cheap
+  for _, s in ipairs(A.All().list) do
+    if s.id ~= pick.id and (s.minNow or s.price) * 4 < pick.netExp and (not cheap or s.price < cheap.price) then cheap = s end
+  end
+  ns.RecipeDB.Register("opp", { Recipes = function(prof)
+    if prof ~= "alchemy" then return {} end
+    return { { out = pick.id, prof = prof, r = { [cheap.id] = 1 }, levels = { 50, 60, 70, 80 },
+               source = { kind = "trainer", cost = 1000, where = "Maître" } } }
+  end })
+  local rec
+  for _, e in ipairs(ns.Opp.Recipes()) do if e.id == pick.id and e.prof == "alchemy" then rec = e end end
+  -- sous-coter : l'enchère la moins chère à 1,5 × le prix habituel
+  local db = ns.realmDB()
+  local saved = db.book[pick.id]
+  local low = math.floor(pick.ev.maxSold)
+  db.book[pick.id] = ns.Scan.PackBook({ { low, 3 }, { low * 2, 10 } }, 3, 400)
+  ns.dataVersion = ns.dataVersion + 1
+  local found
+  for _, e in ipairs(ns.Opp.Undercuts()) do if e.id == pick.id then found = e end end
+  -- ma propre enchère est déjà la moins chère : rien à sous-coter
+  local c = ns.Prof.Char()
+  local savedAuc = c.auctions
+  c.auctions = { t = 0, list = { { id = pick.id, qty = 1, unit = low - 5 } } }
+  ns.dataVersion = ns.dataVersion + 1
+  local mineSkipped = true
+  for _, e in ipairs(ns.Opp.Undercuts()) do if e.id == pick.id then mineSkipped = false end end
+  c.auctions = savedAuc
+  ns.UI.SetMode("recipes"); local r1 = ns.UI.rows[1].shown
+  ns.UI.SetMode("undercut")
+  db.book[pick.id] = saved
+  ns.RecipeDB.providers.opp = nil
+  for i, n in ipairs(ns.RecipeDB.order) do if n == "opp" then table.remove(ns.RecipeDB.order, i) end end
+  ns.dataVersion = ns.dataVersion + 1
+  return rec and rec.access or false, rec and rec.accessOrder, rec and rec.profit, rec and rec.learnCost,
+         found and found.post == low - 1, found and found.premium, found and found.qty, mineSkipped, r1
+end""")(ns)
+print("Opportunités :", [strip(v) for v in opp])
+assert opp[0] and "métier non appris" in strip(opp[0]) and opp[1] == 4 and opp[2] > 0 and opp[3] == 1000, opp
+assert opp[4] is True and opp[5] > 0.1 and opp[6] >= 1 and opp[7] is True and opp[8], opp
+show_ui("recipes"); show_ui("undercut")
+print("OK : onglets Rentables et Sous-coter")
+
+# Fiabilité d'un prix (cas réel du Heavy Shortbow) : 3 vendus à ~7 pa, puis des annonces à 22 pa qui
+# restent sans acheteur et une de mes enchères expirée. Le prix affiché (18 pa) ne doit pas servir.
+tr = lua.eval("""function(ns)
+  local db, T, A = ns.realmDB(), ns.Trust, ns.Analysis
+  local day = ns.History.today()
+  local id = 3036
+  AHLedgerDB.items[id] = { n = "Heavy Shortbow", s = 515, q = 2, c = 2 }
+  db.hist[id] = { [day - 1] = "1450,2,18,3,2,2150", [day] = "11070,6,19,0,2,0,0" }
+  db.days[day - 1] = db.days[day - 1] or { obs = 4.7 * 3600, scans = 2 }
+  -- annonces à 22 pa restées 12 h : notées « l » par Trust.Record
+  local t0 = time()
+  local prev = { ["3036:1:2290:?"] = { c = 1, tl = 4, f = t0 - 13 * 3600 } }
+  local cur = { ["3036:1:2290:?"] = { c = 1, tl = 4 } }
+  T.Record(db, t0, {}, prev, cur)
+  local lingered = db.outcomes[id] ~= nil and cur["3036:1:2290:?"].r == 1
+  ns.dataVersion = ns.dataVersion + 1
+  local s = A.Get(id)
+  local r1 = { s.capped, s.price, s.listedPrice, s.ev.maxSold, s.trust }
+  local l2, why2 = T.Check(s, 1600)                -- poster à 16 pa : non tenu
+  -- ma propre enchère expirée, jamais vendue
+  table.insert(ns.Ledger.DB().ledger, { k = "expired", id = id, t = time(), c = 1, n = "Heavy Shortbow" })
+  ns.dataVersion = ns.dataVersion + 1
+  local one = ns.Bags.Advise(id, 1)                -- 1 expiré, mais 3 ventes vues à ~7 pa : vendre, pas plus cher
+  table.insert(ns.Ledger.DB().ledger, { k = "expired", id = id, t = time(), c = 1, n = "Heavy Shortbow" })
+  ns.dataVersion = ns.dataVersion + 1
+  local s2 = A.Get(id)
+  local adv = ns.Bags.Advise(id, 1)
+  table.remove(ns.Ledger.DB().ledger); table.remove(ns.Ledger.DB().ledger)
+  db.hist[id], db.outcomes[id] = nil, nil
+  ns.dataVersion = ns.dataVersion + 1
+  return lingered, r1[1], r1[2], r1[3], r1[4], r1[5], l2, why2, s2.trust, s2.trustWhy, adv.action, adv.why,
+         one.action, one.post
+end""")(ns)
+print("Fiabilité du prix (Heavy Shortbow) :", tr)
+assert tr[0] is True and tr[1] is True and abs(tr[2] - 2150 / 3) < 1 and tr[3] > 1800, tr   # plafonné à 7 pa 17
+assert tr[6] == "bad" and "au-dessus" in tr[7], tr
+assert tr[8] == "bad" and "expiré chez toi ×2" in tr[9] and tr[10] == "PNJ", tr
+assert tr[12] == "Vendre HV" and tr[13] <= 717, tr
+print("OK : fiabilité d'un prix (prix affiché non tenu, expiré chez toi)")

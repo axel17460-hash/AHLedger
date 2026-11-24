@@ -34,6 +34,8 @@ local EMPTY = {
   vendor = "Aucun achat PNJ rentable. Les marchands que tu visites sont retenus automatiquement.",
   snipe = "Aucune enchère sous le prix de rachat PNJ dans le dernier scan.",
   farm = "Aucune session de farm : tape /ahl farm start avant de farmer, puis /ahl farm stop.",
+  recipes = "Aucune recette rentable trouvée. Ouvre tes fenêtres de métier, ou installe OneForAll pour voir aussi les recettes que tu n'as pas.",
+  undercut = "Aucun marché où l'enchère la moins chère dépasse nettement le prix habituel. Rescanne plus tard.",
 }
 -- Onglets à deux vues : bouton « Vue : … » qui bascule vers l'autre
 UI.VIEWS = {
@@ -44,7 +46,8 @@ UI.VIEWS = {
 }
 UI.PARENT = { level = "craft", track = "ledger" }
 local NO_SCAN = "Pas encore de scan sur ce royaume : ouvre l'HV et clique « Scanner l'HV »."
-local NEEDS_SCAN = { market = true, flip = true, snipe = true, vendor = true, craft = true, level = true }
+local NEEDS_SCAN = { market = true, flip = true, snipe = true, vendor = true, craft = true, level = true, recipes = true,
+                     undercut = true }
 
 -- « +45 % » coloré comme les pastilles des sacs : vert mieux à l'HV, jaune pareil, rouge au PNJ
 function UI.CompareCell(c)
@@ -165,6 +168,46 @@ local MODES = {
       end
       return out
     end,
+  },
+  recipes = {
+    title = "Rentables",
+    sort = "daily",
+    help = "Toutes les recettes de la base (les tiennes + OneForAll), apprises ou non, même d'un métier que tu n'as pas : bénéfice par fabrication (composants au moins cher PNJ/HV, revente HV nette ou PNJ), or/jour que le marché absorbe (ta part de 25 % des ventes × confiance). Amorti = jours de bénéfice pour rembourser la recette. Accès : apprise, à apprendre (où, combien), niveau requis.",
+    cols = {
+      { "Recette", 150, function(e)
+          return itemLabel(e.id, e.s) .. (e.made > 1 and (" ×" .. num(e.made)) or "")
+            .. (e.trust == "test" and " |cffffd100(à tester)|r" or "")
+        end, "name" },
+      { "Métier", 58, function(e) return ns.Prof.LABEL[e.prof] or e.prof end, "prof" },
+      { "Accès", 125, function(e) return e.access end, "accessOrder" },
+      { "Coût", 70, function(e) return ns.money(e.cost) end, "cost", "RIGHT" },
+      { "Bénéfice", 70, function(e) return "|cff40ff40" .. ns.money(e.profit) .. "|r" end, "profit", "RIGHT" },
+      { "ROI", 42, function(e) return ("%.0f%%"):format(e.roi * 100) end, "roi", "RIGHT" },
+      { "Vendus/j", 48, function(e) return e.sellTo == "PNJ" and "PNJ" or num(e.perDay) end, "perDay", "RIGHT" },
+      { "Or/j", 70, function(e) return ns.money(e.daily) end, "daily", "RIGHT" },
+      { "Amorti", 55, function(e)
+          if e.payback == 0 then return "|cff808080—|r" end
+          return e.payback and ("%.1f j"):format(e.payback) or "|cff808080?|r"
+        end, "payback", "RIGHT" },
+    },
+    rows = function() return ns.Opp.Recipes() end,
+  },
+  undercut = {
+    title = "Sous-coter",
+    sort = "score",
+    help = "Marchés où l'enchère la moins chère est nettement au-dessus du prix habituel (prix réel de vente, sinon moyenne 7 j) : poste juste dessous, tu vends plus cher que d'habitude et en premier. À poster = un jour de ventes (au-delà, on te sous-cotera). Gain en plus = (poster − habituel) × quantité, net de commission. Pour toi : ce que tu as en sacs/banque, ce que tu sais fabriquer moins cher, et les risques. Clic = afficher l'objet dans l'HV.",
+    cols = {
+      { "Objet", 150, function(e) return itemLabel(e.id, e.s) end, "name" },
+      { "Poster à/u", 75, function(e) return ns.money(e.post) end, "post", "RIGHT" },
+      { "Habituel/u", 75, function(e) return ns.money(e.fair) end, "fair", "RIGHT" },
+      { "Écart", 45, function(e) return "|cff40ff40" .. ns.pct(e.premium) .. "|r" end, "premium", "RIGHT" },
+      { "À poster", 48, function(e) return tostring(e.qty) end, "qty", "RIGHT" },
+      { "Gain en plus", 75, function(e) return "|cff40ff40" .. ns.money(e.extra) .. "|r" end, "extra", "RIGHT" },
+      { "Vendus/j", 48, function(e) return num(e.perDay) end, "perDay", "RIGHT" },
+      { "Vendeurs", 48, function(e) return e.sellers and tostring(e.sellers) or "?" end, "sellers", "RIGHT" },
+      { "Pour toi", 150, function(e) return e.notes end, "forYouOrder" },
+    },
+    rows = function() return ns.Opp.Undercuts() end,
   },
   bags = {
     title = "Mes objets",
@@ -334,12 +377,14 @@ function UI.Build()
   -- Onglets
   local x = 12
   UI.modeButtons = {}
-  for _, key in ipairs({ "market", "flip", "craft", "bags", "ledger", "vendor", "snipe", "farm" }) do
-    local b = Look.Button(f, MODES[key].title, 94, 22)
+  local TABS = { "market", "flip", "craft", "recipes", "undercut", "bags", "ledger", "vendor", "snipe", "farm" }
+  local step = math.floor((WIDTH - 24) / #TABS) -- les onglets se partagent la largeur de la fenêtre
+  for _, key in ipairs(TABS) do
+    local b = Look.Button(f, MODES[key].title, step - 4, 22)
     b:SetPoint("TOPLEFT", x, -30)
     b:SetScript("OnClick", function() UI.SetMode(key) end)
     UI.modeButtons[key] = b
-    x = x + 99
+    x = x + step
   end
 
   -- Filtres (onglet Marché)

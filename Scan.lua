@@ -337,7 +337,7 @@ function Scan.Diff(prevSigs, sigs, gap)
   local out = {}
   local function bucket(id)
     local b = out[id]
-    if not b then b = { sold = 0, can = 0, exp = 0, amb = 0, posted = 0, soldVal = 0, lv = {} }; out[id] = b end
+    if not b then b = { sold = 0, can = 0, exp = 0, amb = 0, posted = 0, soldVal = 0, lv = {}, lvExp = {} }; out[id] = b end
     return b
   end
 
@@ -374,6 +374,7 @@ function Scan.Diff(prevSigs, sigs, gap)
         b.amb = b.amb + gone * count -- temps restant inconnu
       elseif prev.tl <= 1 then
         b.exp = b.exp + gone * count
+        if buyout > 0 then b.lvExp[#b.lvExp + 1] = { buyout / count, gone * count } end -- invendus, à quel prix (Trust)
       elseif TL_MIN_SECONDS[prev.tl] and gap < TL_MIN_SECONDS[prev.tl] and buyout > 0 then
         local unit = buyout / count
         -- une pile moins chère, déjà là avant, est restée : celle-ci a été retirée
@@ -451,6 +452,7 @@ function Scan.Finish()
   ns.History.RecordRecent(db, now, stats)
   ns.Snipe.FromScan(rows, now)
   if ns.Track then ns.safe("fiabilité", ns.Track.OnScan, db, now, diff) end
+  if ns.Trust then ns.safe("prix tenus", ns.Trust.Record, db, now, diff, db.lastSigs, sigs) end
 
   -- Snapshots bruts : seulement pour l'export Python (/ahl raw on), car volumineux
   if AHLedgerDB.keepRaw ~= false then

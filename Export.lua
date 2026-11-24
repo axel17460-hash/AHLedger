@@ -11,7 +11,7 @@ local _, ns = ...
 local Export = {}
 ns.Export = Export
 
-Export.TOP = { market = 25, rising = 10, flip = 12, craft = 12, bags = 25, auctions = 30, ledger = 12, vendor = 8, farm = 6 }
+Export.TOP = { market = 25, rising = 10, flip = 12, craft = 12, recipes = 12, undercut = 12, bags = 25, auctions = 30, ledger = 12, vendor = 8, farm = 6 }
 
 local function plain(s) return (tostring(s or "?"):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")) end
 -- cuivre -> "12g 34s" / "3s 05c" (sans codes couleur)
@@ -117,6 +117,27 @@ function Export.Build()
     add("%s (%s, %s) : coût %s, valeur %s (%s), bénéfice %s, %s vendus/j, ~%s fabrications/j → %s/j", nameOf(e.id, e.s),
       ns.Prof.LABEL[e.prof] or e.prof, e.diff or "?", g(e.cost), g(math.max(e.value or 0, e.vendorValue)), e.sellTo or "-",
       g(e.profit), num(e.perDay), num(e.vol), g(e.daily))
+  end
+
+  add("")
+  add("## Recettes rentables à poursuivre (apprises ou non, tous métiers)")
+  local plain = function(s) return (tostring(s or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")) end
+  local recs = sorted(ns.Opp.Recipes(), "daily", Export.TOP.recipes)
+  if #recs == 0 then add("aucune (ouvrir les fenêtres de métier, ou installer OneForAll)") end
+  for _, e in ipairs(recs) do
+    add("%s (%s) : %s — coût %s, bénéfice %s (ROI %.0f%%), vente %s, %s/j%s", nameOf(e.id, e.s), ns.Prof.LABEL[e.prof] or e.prof,
+      plain(e.access), g(e.cost), g(e.profit), e.roi * 100, e.sellTo, g(e.daily),
+      e.payback and e.payback > 0 and (", recette amortie en %.1f j"):format(e.payback) or "")
+  end
+
+  add("")
+  add("## Sous-coter : enchère la moins chère au-dessus du prix habituel")
+  local ucs = sorted(ns.Opp.Undercuts(), "score", Export.TOP.undercut)
+  if #ucs == 0 then add("aucune") end
+  for _, e in ipairs(ucs) do
+    add("%s : poster %d à %s/u (habituel %s/u, %s), gain en plus %s, %s vendus/j, %s vendeurs%s", nameOf(e.id, e.s), e.qty,
+      g(e.post), g(e.fair), ns.pct(e.premium), g(e.extra), num(e.perDay), e.sellers and tostring(e.sellers) or "?",
+      e.notes ~= "" and (" — " .. plain(e.notes)) or "")
   end
 
   for _, prof in ipairs(ns.Plan.CraftProfs()) do
