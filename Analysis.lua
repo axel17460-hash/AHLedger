@@ -745,3 +745,69 @@ function Analysis.CraftUp(id)
     and (not best.gainPct or best.gainPct >= Analysis.CRAFT_UP_MIN_GAIN)
   return worth and best or nil, best
 end
+
+-- « Se vend vraiment ? » : un verdict simple, à partir des ventes SÛRES (enchères parties avant leur
+-- fin, sans les ambiguës ni les relistes), du taux d'écoulement et de tes propres courriers d'HV.
+-- Tes ventes et tes expirations passent avant le marché : c'est la seule preuve directe sur Forever,
+-- où l'on ne voit pas les noms des vendeurs.
+Analysis.SELLS_FAST = 1        -- ventes sûres par jour pour « oui »
+Analysis.SELLS_SLOW = 0.3      -- ... et pour « lentement » (une tous les 3 jours environ)
+Analysis.SELLS_MIN_OBS = 24    -- heures de marché observées avant de conclure « non »
+Analysis.SELLS_OWN_MIN = 3     -- ventes ou expirations chez toi pour qu'elles décident seules
+Analysis.SELLS_LABEL = {
+  yes = "|cff40ff40se vend|r", slow = "|cffffd100se vend lentement|r",
+  no = "|cffff5050ne se vend pas|r", unknown = "|cff808080on ne sait pas encore|r",
+}
+Analysis.SELLS_SHORT = {
+  yes = "|cff40ff40oui|r", slow = "|cffffd100lent|r", no = "|cffff5050non|r", unknown = "|cff808080?|r",
+}
+Analysis.SELLS_RANK = { yes = 3, slow = 2, unknown = 1, no = 0 }
+
+function Analysis.Sells(s, real)
+  local why = {}
+  local own = real and (real.sold > 0 or real.expired > 0) and real or nil
+  -- 1. Tes courriers : assez de cas pour trancher seuls
+  if own and own.sold >= Analysis.SELLS_OWN_MIN and own.sold >= 2 * own.expired then
+    return "yes", ("%d vendus chez toi, %d expirés"):format(own.sold, own.expired)
+  end
+  if own and own.expired >= Analysis.SELLS_OWN_MIN and own.sold == 0 then
+    return "no", ("%d expirés chez toi, aucune vente"):format(own.expired)
+  end
+  if not s then
+    if own then return "unknown", ("chez toi : %d vendus, %d expirés"):format(own.sold, own.expired) end
+    return "unknown", "pas de marché HV observé"
+  end
+  -- 2. Le marché : ventes sûres, la plus prudente de 7 j et des dernières heures
+  local rate = s.surePerDay
+  if rate and s.recentSurePerDay then rate = math.min(rate, s.recentSurePerDay) end
+  local st = s.sellThrough
+  local level
+  if not rate or (s.obsHours or 0) < 6 then
+    level = "unknown"; why[#why + 1] = ("%.0f h observées seulement"):format(s.obsHours or 0)
+  elseif rate >= Analysis.SELLS_FAST and (not st or st >= 0.5) then
+    level = "yes"
+  elseif rate >= Analysis.SELLS_SLOW or (rate > 0 and st and st >= 0.5) then
+    level = "slow"
+  elseif (s.obsHours or 0) >= Analysis.SELLS_MIN_OBS then
+    level = "no"
+  else
+    level = "unknown"; why[#why + 1] = ("aucune vente sûre en %.0f h"):format(s.obsHours or 0)
+  end
+  if rate and level ~= "unknown" then why[#why + 1] = ("~%s ventes sûres/j"):format(
+    rate >= 10 and ("%.0f"):format(rate) or ("%.1f"):format(rate)) end
+  if st then why[#why + 1] = ("%.0f %% des enchères partent"):format(st * 100) end
+  -- Le volume brut gonflé par les annulations et relistes : on le dit, sinon « 50 vendus/j » trompe
+  if s.perDay and rate and s.perDay >= 2 * math.max(rate, 0.5) then
+    why[#why + 1] = ("%.0f/j au total, surtout des relistes ou ventes douteuses"):format(s.perDay)
+  end
+  if s.stockDays and s.stockDays > Analysis.HEAVY_STOCK_DAYS and level == "yes" then
+    level = "slow"; why[#why + 1] = ("%.0f j de stock déjà en rayon"):format(s.stockDays)
+  end
+  -- 3. Tes courriers nuancent le marché quand ils sont trop peu nombreux pour trancher
+  if own then
+    if own.expired > own.sold and level == "yes" then level = "slow" end
+    if own.sold > 0 and level == "no" then level = "slow" end
+    why[#why + 1] = ("chez toi : %d vendus, %d expirés"):format(own.sold, own.expired)
+  end
+  return level, table.concat(why, " · ")
+end

@@ -93,6 +93,12 @@ local function build(id)
   end
   local up, upDetail = craftUpLines(id)
   if up then L[#L + 1] = { up, upDetail, color = { 1, 0.6, 0 } } end
+  -- Se vend vraiment ? (ventes sûres, écoulement, tes courriers)
+  local sells, sellsWhy = ns.Analysis.Sells(s, ns.Analysis.RealSales()[id])
+  if s or sells ~= "unknown" or sellsWhy:find("chez toi") then
+    kv("Se vend à l'HV ?", ns.Analysis.SELLS_LABEL[sells])
+    if sellsWhy ~= "" then line("  " .. sellsWhy, 0.6, 0.6, 0.6) end
+  end
 
   -- Prix
   if s then
@@ -264,10 +270,14 @@ local function buildCompact(id)
   local up = craftUpLines(id)
   if up then L[#L + 1] = { up, r = 1, g = 0.6, b = 0 } end
   local s = ns.Analysis.Get(id)
+  local sells = ns.Analysis.Sells(s, ns.Analysis.RealSales()[id])
   local price = s and (s.minNow or s.realPrice or s.avg7)
   if price then
     local t = s.trend24 or s.trend
-    L[#L + 1] = { "HV /u", ns.money(price) .. (t and ("  " .. trendText(t, " /j")) or "") }
+    L[#L + 1] = { "HV /u", ns.money(price) .. (t and ("  " .. trendText(t, " /j")) or "")
+                  .. "  · " .. ns.Analysis.SELLS_LABEL[sells] }
+  elseif sells ~= "unknown" then
+    L[#L + 1] = { "Se vend à l'HV ?", ns.Analysis.SELLS_LABEL[sells] }
   end
   return L
 end

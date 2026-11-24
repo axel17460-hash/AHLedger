@@ -935,7 +935,7 @@ ui = lua.eval("""function(ns)
   UI.content.GetHeight = nil
   UI.liquidOnly = true
   UI.SetMode("market")
-  return footer, emptyHidden, empty, emptyShown, UI.headers[9].arrow.shown, UI.helpText ~= nil
+  return footer, emptyHidden, empty, emptyShown, UI.headers[10].arrow.shown, UI.helpText ~= nil
 end""")(ns)
 footer, emptyHidden, empty, emptyShown, sortArrow, hasHelp = ui
 print("Pied de page :", strip(footer)); print("Vide :", empty)
@@ -1387,3 +1387,25 @@ assert abs(bias[4] - bias[2]) < 1e-9 and bias[5] == "objet", bias
 assert abs(bias[6] - bias[4]) < 1e-6 and bias[7] is True, bias  # le net baisse, le prix du marché ne bouge pas
 assert abs(bias[8] - 1000) < 1e-6 and abs(bias[9] + 0.4) < 1e-6, bias  # bilan : écart vs prix noté à la vente
 print("OK : correction par tes ventes réelles")
+
+# --- « Se vend vraiment ? » (Analysis.Sells) ---
+sv = lua.eval("""function(ns)
+  local A = ns.Analysis
+  local function L(s, real) local l, w = A.Sells(s, real); return l end
+  return {
+    L({ obsHours = 40, surePerDay = 5, recentSurePerDay = 4, sellThrough = 0.8, perDay = 6 }),       -- oui
+    L({ obsHours = 40, surePerDay = 0.5, sellThrough = 0.3, perDay = 30 }),                          -- lent
+    L({ obsHours = 40, surePerDay = 0, sellThrough = 0.1, perDay = 40 }),                            -- non : que des relistes
+    L({ obsHours = 10, surePerDay = 0, perDay = 0 }),                                                -- ? trop tôt
+    L({ obsHours = 40, surePerDay = 0, perDay = 0 }, { sold = 4, expired = 1, bought = 0 }),         -- oui : tes ventes
+    L({ obsHours = 40, surePerDay = 5, sellThrough = 0.8 }, { sold = 0, expired = 3, bought = 0 }),  -- non : tes expirations
+    L({ obsHours = 40, surePerDay = 5, sellThrough = 0.8, stockDays = 12 }),                         -- lent : rayon saturé
+    L(nil, nil),                                                                                     -- ? jamais vu
+    select(2, A.Sells({ obsHours = 40, surePerDay = 0.4, sellThrough = 0.5, perDay = 40 })),
+  }
+end""")(ns)
+sv = [sv[i] for i in range(1, 10)]
+print("Se vend :", sv)
+assert sv[:8] == ["yes", "slow", "no", "unknown", "yes", "no", "slow", "unknown"], sv
+assert "relistes" in sv[8], sv
+print("OK : verdict « se vend » sur ventes sûres, courriers d'abord")

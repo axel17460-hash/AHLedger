@@ -4,7 +4,7 @@ local _, ns = ...
 local UI = { mode = "market", offset = 0, cat = 1, liquidOnly = true, sortDesc = true }
 ns.UI = UI
 
-local ROWS, ROW_H, WIDTH, MAX_COLS, GAP = 16, 20, 820, 9, 5
+local ROWS, ROW_H, WIDTH, MAX_COLS, GAP = 16, 20, 820, 10, 5
 local MAX_ROWS = 40 -- lignes créées ; seules celles qui tiennent dans la hauteur disponible s'affichent
 
 local CATS = {
@@ -83,16 +83,22 @@ local MODES = {
       { "Vendus/j", 52, function(e) return num(e.perDay) end, "perDay", "RIGHT" },
       { "Stock (j)", 50, function(e) return num(e.stockDays, "%.1f") end, "stockDays", "RIGHT" },
       { "Écoulé", 44, function(e) return share(e.sellThrough) end, "sellThrough", "RIGHT" },
+      { "Se vend", 46, function(e) return ns.Analysis.SELLS_SHORT[e.sells] end, "sellsRank" },
       { "Or/jour", 82, function(e) return ns.money(e.gpd) end, "gpd", "RIGHT" },
-      { "Signaux", 140, function(e) return table.concat(e.signals, " · ") end, "score" },
+      { "Signaux", 94, function(e) return table.concat(e.signals, " · ") end, "score" },
     },
     rows = function()
       local out, filter = {}, CATS[UI.cat][2]
       local rel = filter == "prof" and ns.Prof.Related() or nil
+      local real = ns.Analysis.RealSales()
       for _, s in ipairs(ns.Analysis.All().list) do
         local okCat = not filter or (rel and rel[s.id]) or (not rel and s.class and filter[s.class])
         local okLiq = not UI.liquidOnly or (s.perDay and s.perDay >= 1)
-        if okCat and okLiq then out[#out + 1] = s end
+        if okCat and okLiq then
+          s.sells = ns.Analysis.Sells(s, real[s.id])
+          s.sellsRank = ns.Analysis.SELLS_RANK[s.sells]
+          out[#out + 1] = s
+        end
       end
       return out
     end,
@@ -222,13 +228,17 @@ local MODES = {
       { "À poster", 50, function(e) return e.postQty and tostring(e.postQty) or "-" end, "postQty", "RIGHT" },
       { "Valeur nette", 82, function(e) return ns.money(e.value) end, "value", "RIGHT" },
       { "HV/PNJ", 55, function(e) return UI.CompareCell(e.cmp) end, "cmpGain", "RIGHT" },
-      { "Pourquoi", 130, function(e) return e.why or "" end, "why" },
+      { "Se vend", 46, function(e) return ns.Analysis.SELLS_SHORT[e.sells] end, "sellsRank" },
+      { "Pourquoi", 84, function(e) return e.why or "" end, "why" },
     },
     rows = function()
       local out = ns.Bags.Advice()
+      local real = ns.Analysis.RealSales()
       for _, e in ipairs(out) do
         e.cmp = ns.Bags.Compare(e.id)
         e.cmpGain = e.cmp and (e.cmp.gain or math.huge) or nil
+        e.sells = ns.Analysis.Sells(e.s, real[e.id])
+        e.sellsRank = ns.Analysis.SELLS_RANK[e.sells]
       end
       return out
     end,
