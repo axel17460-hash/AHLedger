@@ -45,7 +45,7 @@ function Export.Build()
   add("# AHLedger — rapport pour Claude (%s)", date("%Y-%m-%d %H:%M"))
   add("Royaume : %s · Perso : %s niv. %s %s · Or : %s", ns.realmKey(), plain(UnitName("player")),
     tostring(UnitLevel and UnitLevel("player") or "?"), plain(UnitClass and UnitClass("player") or "?"),
-    g(GetMoney and GetMoney() or 0))
+    g(A.Gold() or 0))
   local skills = {}
   for k, r in pairs(c.skills) do skills[#skills + 1] = ("%s %d/%d"):format(ns.Prof.LABEL[k] or k, r, c.max and c.max[k] or 0) end
   table.sort(skills)
@@ -56,6 +56,15 @@ function Export.Build()
   add("Données : %d j d'historique, %.0f h de marché observées, dernier scan %s · commission %.1f%% (%s), dépôt %.0f%% du prix PNJ",
     nDays, obs / 3600, db.lastScanTime and date("%Y-%m-%d %H:%M", db.lastScanTime) or "jamais",
     A.AH_CUT * 100, cal.cut and "mesurée" or "supposée", A.DEPOSIT_RATE * 100)
+  local bt = A.biasT or (ns.Ledger.BiasTable and ns.Ledger.BiasTable(db))
+  if bt and bt.n > 0 then
+    add("Tes ventes réelles vs prix prévu : %+.0f %% en moyenne sur %d ventes → ce qu'une vente rapporte est corrigé ×%.2f (par objet dès ta 1re vente, rapproché de la moyenne)",
+      ((bt.raw or 1) - 1) * 100, bt.n, bt.global)
+  end
+  local budget = A.Budget()
+  if budget then
+    add("Budget d'un conseil d'achat : %s (%.0f %% de ton or) ; flips et achats PNJ plafonnés à ce montant", g(budget), A.BUDGET_SHARE * 100)
+  end
   add("Unités : prix par unité sauf mention (g/s/c = or/argent/cuivre) ; tend = variation du prix par jour ; écoul = part des enchères vendues avant expiration ; stockJ = jours de ventes en rayon.")
 
   local all = A.All().list
@@ -88,6 +97,10 @@ function Export.Build()
   add("")
   add("## Flips HV possibles (dernier scan)")
   local flips = sorted(A.Flips(), "profit", Export.TOP.flip)
+  if (A.flipsOverBudget or 0) > 0 then
+    add("%d flip%s rentable%s écarté%s : hors de ton budget (%s)", A.flipsOverBudget, A.flipsOverBudget > 1 and "s" or "",
+      A.flipsOverBudget > 1 and "s" or "", A.flipsOverBudget > 1 and "s" or "", g(A.flipBudget or 0))
+  end
   if #flips == 0 then add("aucun") else add("« tout de suite » = remettre en vente aussitôt ; « à stocker » = tout le marché est bas, garder jusqu'au rebond (bénéfice espéré, d'après les creux passés de l'objet)") end
   for _, f in ipairs(flips) do
     if f.kind == "stock" then
@@ -101,6 +114,7 @@ function Export.Build()
       add("%s [tout de suite] : acheter %d jusqu'à %s/u (coût %s), revendre %s/u → bénéfice %s (ROI %.0f%%, écoulé en %.1f j)",
         nameOf(f.id, f.s), f.qty, g(f.maxBuy), g(f.cost), g(f.resale), g(f.profit), f.roi * 100, f.days)
     end
+    if f.budgetCut then add("  quantité limitée par ton budget") end
     if f.mine then
       add("  tes reventes : %d achetés puis revendus, gardés ~%.1f j, %s/u", f.mine.units, f.mine.days, g(f.mine.profit))
     end
@@ -153,8 +167,10 @@ function Export.Build()
     if rank and maxRank and rank < maxRank then
       local p = ns.Plan.Level(prof, rank, maxRank)
       add("")
-      add("## Montée %s %d → %d%s : %d fabrications, coût net %s (négatif = gain si tout se revend), à avancer %s", ns.Prof.LABEL[prof] or prof,
-        p.from, p.reached, p.partial and " (plan partiel, seuils des recettes inconnus)" or "", math.ceil(p.crafts), g(p.total), g(p.outlay))
+      local gold = A.Gold()
+      add("## Montée %s %d → %d%s : %d fabrications, coût net %s (négatif = gain si tout se revend), à avancer %s%s", ns.Prof.LABEL[prof] or prof,
+        p.from, p.reached, p.partial and " (plan partiel, seuils des recettes inconnus)" or "", math.ceil(p.crafts), g(p.total), g(p.outlay),
+        (gold and p.outlay > gold) and (" (tu n'as que %s)"):format(g(gold)) or "")
       for _, l in ipairs(ns.Plan.Describe(p)) do add("%s", l) end
     end
   end
@@ -194,6 +210,7 @@ function Export.Build()
     local tail
     if e.realSold then tail = (" · toi : %d vendus à %s, %d expirés"):format(e.realSold, g(e.realAvg), e.realExpired or 0) else tail = "" end
     local verdict = e.reliable and "fiable" or ("à tester (%s) : %d u d'abord"):format(e.why, e.testQty or 1)
+    if e.budgetCut then verdict = verdict .. ", limité par ton budget" end
     add("%s : achat %s chez %s (%s), revente %s (×%.0f), marge nette %s/u, %s vendus/j dans tout l'HV (vise %s/j) — %s%s",
       nameOf(e.id, e.s), g(e.buy), plain(e.npc), plain(e.zone), g(e.s.price), e.markup, g(e.margin), num(e.perDay), num(e.vol), verdict, tail)
   end

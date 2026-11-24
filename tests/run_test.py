@@ -21,8 +21,10 @@ for f in [l.strip() for l in toc.splitlines() if l.strip().endswith(".lua")]:
     chunk("AHLedger", ns)
 lua.execute('fire("ADDON_LOADED", "AHLedger"); GetRealmName = function() return "" end; fire("AUCTION_HOUSE_SHOW"); runTimers()')
 
-# 14 jours ; le joueur scanne chaque soir de 18 h à 23 h
+# 14 jours ; le joueur scanne chaque soir de 18 h à 23 h. Il a 1000 po : le budget (Analysis.Budget)
+# ne limite pas les conseils de la simulation
 lua.execute("""
+addMoney(1000 * 10000)
 for h = 1, 14 * 24 do
   simHour()
   local hr = clockHour()
@@ -116,6 +118,27 @@ silkFlip = flips.get(4306)
 print("Flip soie :", silkFlip and (silkFlip.qty, silkFlip.maxBuy, round(silkFlip.resale), round(silkFlip.profit)))
 assert silkFlip and silkFlip.maxBuy >= 500 and silkFlip.qty >= 20 and silkFlip.resale > 900
 assert 4338 not in flips  # tisse-mage en afflux, pas de pile sous le prix
+
+# Budget : un flip est plafonné à la moitié de ton or ; sans or, il est écarté et compté
+bud = lua.eval("""function(ns)
+  local c, A = ns.Prof.Char(), ns.Analysis
+  local saved = c.money
+  local full
+  for _, x in ipairs(A.Flips()) do if x.id == 4306 then full = x end end
+  c.money = full.cost                              -- budget = la moitié du flip complet
+  local f
+  for _, x in ipairs(A.Flips()) do if x.id == 4306 then f = x end end
+  local r = { f and f.qty, f and f.cost, f and f.budgetCut, A.Budget(), 0, 0, full.qty }
+  c.money = 0
+  local n = #A.Flips()
+  r[5], r[6] = n, A.flipsOverBudget
+  c.money = saved
+  return r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10]
+end""")(ns)
+print("Budget :", list(bud))
+assert bud[0] and bud[0] < bud[6] and bud[1] <= bud[3] and bud[2] is True, bud
+assert bud[4] == 0 and bud[5] >= 1, bud
+print("OK : flips plafonnés par ton or")
 # Artisanat : coût = 2 soies (HV) + 1 fiole (PNJ 20c)
 craft = {c.id: c for c in ns.Analysis.Crafts().values()}[929]
 silkMin = ns.Analysis.Get(4306).minNow
@@ -1331,3 +1354,36 @@ assert pg[13] > 15000, pg                                        # le prix du jo
 assert pg[10] is False and pg[11] == 7358, pg                    # marché sain : fabriquer
 assert pg[12] is not None and pg[12] <= 11999, pg                # suivi au prix où l'on vend, sous l'enchère la moins chère
 print("OK : fabriquer pour l'HV seulement si l'objet partira (ventes sûres, rayon pas saturé)")
+
+# Correction par tes ventes réelles : 4 ventes de soie à 60 % du prix prévu, 2 de tisse-mage au prix prévu
+bias = lua.eval("""function(ns)
+  local db, A, L = ns.realmDB(), ns.Analysis, ns.Ledger
+  local saved = db.ledger
+  ns.dataVersion = ns.dataVersion + 1
+  local silk0 = A.Get(4306)
+  local net0, price0 = silk0.net, silk0.price
+  local now = time()
+  db.ledger = {}
+  for i = 1, 4 do db.ledger[#db.ledger + 1] = { k = "sold", id = 4306, n = "Silk Cloth", c = 10, g = 6000, cut = 300, dep = 0, t = now, pp = 1000 } end
+  for i = 1, 2 do db.ledger[#db.ledger + 1] = { k = "sold", id = 4338, n = "Mageweave Cloth", c = 1, g = 500, cut = 25, dep = 0, t = now, pp = 500 } end
+  -- un courrier sans prix noté : prix prévu repris de l'historique du jour
+  db.ledger[#db.ledger + 1] = { k = "sold", id = 4306, n = "Silk Cloth", c = 1, g = 1, cut = 0, dep = 0, t = now - 99 * 86400 }
+  local t = L.BiasTable(db)
+  ns.dataVersion = ns.dataVersion + 1
+  local s = A.Get(4306)
+  local rows = {}
+  for _, r in ipairs((L.Summary())) do rows[r.id or r.name] = r end
+  local r = { t.n, t.global, t.items[4306].f, t.items[4338].f, s.bias, s.biasSrc, s.net / net0, s.price == price0,
+              rows[4306].predicted, rows[4306].gap }
+  db.ledger = saved
+  ns.dataVersion = ns.dataVersion + 1
+  return r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10]
+end""")(ns)
+print("Correction par tes ventes :", [round(x, 3) if isinstance(x, float) else x for x in bias])
+assert bias[0] == 6, bias                                   # la vente sans historique ce jour-là est ignorée
+assert 0.75 < bias[1] < 0.95, bias                          # moyenne globale rapprochée de 1
+assert 0.6 < bias[2] < 0.8 and bias[3] <= 1.0, bias         # soie corrigée, tisse-mage plafonné à 1
+assert abs(bias[4] - bias[2]) < 1e-9 and bias[5] == "objet", bias
+assert abs(bias[6] - bias[4]) < 1e-6 and bias[7] is True, bias  # le net baisse, le prix du marché ne bouge pas
+assert abs(bias[8] - 1000) < 1e-6 and abs(bias[9] + 0.4) < 1e-6, bias  # bilan : écart vs prix noté à la vente
+print("OK : correction par tes ventes réelles")

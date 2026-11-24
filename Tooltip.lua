@@ -109,6 +109,10 @@ local function build(id)
     end
     if s.trust then kv("Fiabilité du prix", ns.Trust.LABEL[s.trust] .. " · " .. (s.trustWhy or "")) end
     kv("Net /u (commission, dépôts)", ns.money(s.netExp))
+    if s.bias and s.bias < 0.995 then
+      kv("Correction par tes ventes", ("×%.2f  |cff808080(%s, %d vente%s)|r"):format(s.bias,
+        s.biasSrc == "objet" and "cet objet" or "toutes tes ventes", s.biasN or 0, (s.biasN or 0) > 1 and "s" or ""))
+    end
     if s.spike then
       kv("Pic de prix", ("habituel %s · |cffff8040vends ce que tu as, n'investis pas|r"):format(ns.money(s.usual)))
     end
@@ -140,7 +144,7 @@ local function build(id)
     end
 
     -- Opportunités
-    local f = book and ns.Analysis.FlipFor(s, book)
+    local f = book and ns.Analysis.FlipFor(s, book, nil, ns.Analysis.Budget())
     if f and f.kind == "stock" then
       line(("Flip à stocker : acheter %d jusqu'à %s, revendre %s quand le prix remonte → ~+%s espéré"):format(
         f.qty, ns.money(f.maxBuy), ns.money(f.resale), ns.money(f.profit)), 0.4, 0.8, 1)
@@ -158,12 +162,16 @@ local function build(id)
       line(("Flip : acheter %d jusqu'à %s, revendre tout de suite %s → +%s (ROI %.0f%%)"):format(
         f.qty, ns.money(f.maxBuy), ns.money(f.resale), ns.money(f.profit), f.roi * 100), 0.4, 1, 0.4)
     end
+    if f and f.budgetCut then
+      line(("  Quantité limitée par ton or (budget %s, %.0f %% de ton or)"):format(
+        ns.money(ns.Analysis.Budget() or 0), ns.Analysis.BUDGET_SHARE * 100), 0.7, 0.7, 0.7)
+    end
     local held = ns.Ledger.Holds()[id]
     if held and held.units > 0 then
       line(("Tes reventes : %d achetés puis revendus, gardés ~%.1f j, %s/u"):format(
         held.units, held.days, (held.profit >= 0 and "+" or "-") .. ns.money(math.abs(held.profit))), 0.7, 0.7, 0.7)
     end
-    local vf = vendor and ns.Analysis.VendorFlip(id, s, vendor, ns.Analysis.RealSales())
+    local vf = vendor and ns.Analysis.VendorFlip(id, s, vendor, ns.Analysis.RealSales(), ns.Analysis.Budget())
     if vf then
       if vf.reliable then
         line(("PNJ → HV : +%s/u net, vise ~%.0f/j"):format(ns.money(vf.margin), vf.vol), 0.4, 1, 0.4)

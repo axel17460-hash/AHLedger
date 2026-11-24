@@ -114,6 +114,11 @@ function Ledger.ReadInbox()
         match.x = match.x or e.x
       else
         e.t = time()
+        -- prix que l'addon prévoyait au moment de la vente (avant correction : voir Ledger.Bias)
+        if e.k == "sold" and e.id and ns.Analysis then
+          local s = ns.Analysis.Get(e.id)
+          if s and s.price and s.price > 0 then e.pp = math.floor(s.price + 0.5) end
+        end
         db.ledger[#db.ledger + 1] = e
         used[e] = true
         added = added + 1
@@ -198,6 +203,76 @@ function Ledger.Calibrate()
   ns.dataVersion = (ns.dataVersion or 0) + 1
 end
 
+-- Écart entre tes ventes réelles et le prix prévu par l'addon. Constaté le 24/11/2026 sur 40 ventes :
+-- tu touchais de 27 à 70 % de moins que prévu (Silk Cloth, Medium Leather, Turtle Scale…), et tous les
+-- calculs (sacs, artisanat, achat PNJ, flips) partaient de ce prix trop haut.
+-- * Prix prévu d'une vente : celui que l'addon affichait quand le courrier a été lu (e.pp, sans
+--   correction, pour que la mesure ne se mesure pas elle-même) ; pour les anciennes lignes, le prix de
+--   l'objet ce jour-là dans l'historique (prix réel si au moins 5 ventes vues, sinon prix affiché).
+-- * Chaque courrier compte pour une observation (601 flèches en un courrier = 1 vente) : ratio = prix
+--   obtenu / prix prévu, moyenne des logarithmes.
+-- * Moyenne de toutes tes ventes, rapprochée de 1 tant qu'il y en a peu : n / (n + BIAS_GLOBAL_K).
+--   Celle d'un objet est rapprochée de la moyenne globale : n / (n + BIAS_ITEM_K).
+-- * Facteur borné entre BIAS_MIN et BIAS_MAX : on ne relève jamais le prix au-dessus du prix de
+--   marché (prudence : mieux vaut rater un bon coup que conseiller un achat qui perd).
+Ledger.BIAS_GLOBAL_K = 5
+Ledger.BIAS_ITEM_K = 3
+Ledger.BIAS_MIN, Ledger.BIAS_MAX = 0.4, 1.0
+
+-- Prix prévu par l'addon pour la ligne de vente e (nil si inconnu)
+function Ledger.PredictedAt(db, e)
+  if e.pp and e.pp > 0 then return e.pp, "noté" end
+  local h = e.id and e.t and db.hist and db.hist[e.id]
+  if not h then return nil end
+  local H, A = ns.History, ns.Analysis
+  local day = H.today(e.t)
+  for d = day, day - 1, -1 do
+    local r = H.parse(h[d])
+    if r then
+      if r.sold >= (A and A.MIN_SOLD_FOR_REAL or 5) and r.soldVal > 0 then return r.soldVal / r.sold, "historique" end
+      if r.pN > 0 then return r.pSum / r.pN, "historique" end
+    end
+  end
+end
+
+local function clampBias(f) return math.max(Ledger.BIAS_MIN, math.min(Ledger.BIAS_MAX, f)) end
+
+-- { global = facteur, n = ventes mesurées, raw = ratio brut, items = { [id] = { f, n, raw } } }
+function Ledger.BiasTable(db)
+  db = db or Ledger.DB()
+  local per, sumL, n = {}, 0, 0
+  for _, e in ipairs(db.ledger or {}) do
+    if e.k == "sold" and e.id and (e.g or 0) > 0 and (e.c or 0) > 0 then
+      local pp = Ledger.PredictedAt(db, e)
+      if pp and pp > 0 then
+        local ratio = math.max(0.1, math.min(10, e.g / e.c / pp))
+        local L = math.log(ratio)
+        local p = per[e.id]
+        if not p then p = { sum = 0, n = 0 }; per[e.id] = p end
+        p.sum, p.n = p.sum + L, p.n + 1
+        sumL, n = sumL + L, n + 1
+      end
+    end
+  end
+  local gL = n > 0 and sumL / n or 0
+  local gShrunk = gL * n / (n + Ledger.BIAS_GLOBAL_K)
+  local out = { global = clampBias(math.exp(gShrunk)), n = n, raw = n > 0 and math.exp(gL) or nil, items = {} }
+  for id, p in pairs(per) do
+    local L = (p.sum + Ledger.BIAS_ITEM_K * gShrunk) / (p.n + Ledger.BIAS_ITEM_K)
+    out.items[id] = { f = clampBias(math.exp(L)), n = p.n, raw = math.exp(p.sum / p.n) }
+  end
+  return out
+end
+
+-- Facteur à appliquer à ce que rapporte une vente de l'objet id : facteur, ventes mesurées, source
+function Ledger.BiasFor(t, id)
+  if not t then return 1, 0 end
+  local it = t.items[id]
+  if it then return it.f, it.n, "objet" end
+  if t.n > 0 then return t.global, t.n, "global" end
+  return 1, 0
+end
+
 -- Bilan par objet sur les Ledger.DAYS derniers jours
 function Ledger.Summary()
   local db = Ledger.DB()
@@ -208,7 +283,8 @@ function Ledger.Summary()
       local key = e.id or e.n or "?"
       local r = by[key]
       if not r then
-        r = { id = e.id, name = e.n, bought = 0, spent = 0, sold = 0, gross = 0, revenue = 0, expired = 0 }
+        r = { id = e.id, name = e.n, bought = 0, spent = 0, sold = 0, gross = 0, revenue = 0, expired = 0,
+              ppSum = 0, ppUnits = 0 }
         by[key] = r
       end
       if e.k == "bought" then
@@ -216,6 +292,8 @@ function Ledger.Summary()
       elseif e.k == "sold" then
         r.sold, r.gross = r.sold + e.c, r.gross + e.g
         r.revenue = r.revenue + e.g - (e.cut or 0)
+        local pp = Ledger.PredictedAt(db, e)
+        if pp then r.ppSum, r.ppUnits = r.ppSum + pp * e.c, r.ppUnits + e.c end
         tot.cut = tot.cut + (e.cut or 0)
       else
         r.expired = r.expired + e.c
@@ -227,7 +305,8 @@ function Ledger.Summary()
     r.balance = r.revenue - r.spent
     r.avgSale = r.sold > 0 and r.gross / r.sold or nil
     local s = r.id and ns.Analysis.Get(r.id)
-    r.predicted = s and s.price
+    -- prix prévu au moment des ventes (sinon le prix d'aujourd'hui, qui a pu bouger depuis)
+    r.predicted = r.ppUnits > 0 and r.ppSum / r.ppUnits or (s and s.price)
     if r.avgSale and r.predicted then r.gap = r.avgSale / r.predicted - 1 end
     r.sellThrough = (r.sold + r.expired) > 0 and r.sold / (r.sold + r.expired) or nil
     tot.spent, tot.revenue = tot.spent + r.spent, tot.revenue + r.revenue

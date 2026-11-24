@@ -1,4 +1,4 @@
-# AHLedger (v0.8.1)
+# AHLedger (v0.8.2)
 
 Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l'hôtel des ventes et suit les hausses et baisses de prix, pour savoir quoi farmer avant tout le monde. L'analyse se fait entièrement en jeu.
 
@@ -80,6 +80,8 @@ Un addon ne peut pas communiquer avec l'extérieur. AHLedger prépare donc un ra
   - `dépeçage` : ton niveau de dépeçage suffit pour récolter cet objet toi-même.
 - **Écoulé** : part des enchères vendues avant d'expirer sur 7 jours (avec un a priori de 2 sur 3 tant qu'il y a peu de données).
 - **Or/jour** : (prix − commission − dépôts perdus sur les remises en vente) × vendus/jour. Le dépôt est estimé à 15 % du prix PNJ par mise en vente (`Analysis.DEPOSIT_RATE`) jusqu'à 5 ventes relevées au courrier, puis mesuré sur tes factures (environ 43 % sur Forever le 24/11/2026 : il dépend de la durée de mise en vente choisie).
+- **Correction par tes ventes réelles** : chaque vente lue au courrier garde le prix que l'addon prévoyait à ce moment-là (pour les ventes plus anciennes, le prix de l'objet ce jour-là dans l'historique). Le rapport prix obtenu / prix prévu (un courrier = une observation) donne un facteur par objet, rapproché de la moyenne de toutes tes ventes tant qu'il y en a peu, et borné entre 0,4 et 1 : il n'augmente jamais une valeur. Il réduit ce qu'une vente te rapporte (net, or/jour, sacs, artisanat, achat PNJ, revente des flips), mais pas le prix du marché affiché. Mesuré le 24/11/2026 sur 33 ventes : −13 % en moyenne (Turtle Scale −78 %, Medium Leather −55 %). L'infobulle affiche « Correction par tes ventes », le rapport donne la moyenne. La colonne « vs prévu » de Mes ventes compare désormais au prix prévu au moment de la vente, et non plus au prix d'aujourd'hui (d'où les écarts de −27 à −70 % affichés avant). Réglages : `ns.Ledger.BIAS_*`.
+- **Budget** : ton or est relevé à chaque changement (`PLAYER_MONEY`), car à la déconnexion le jeu peut déjà renvoyer 0. Chaque conseil d'achat (Flip HV, Achat PNJ) est plafonné à la moitié de ton or (`ns.Analysis.BUDGET_SHARE`) ; un flip rentable que tu ne peux pas payer est écarté, et le rapport dit combien. « Limité par ton or » signale une quantité réduite. Le rapport signale aussi une montée de métier qui demande d'avancer plus d'or que tu n'en as.
 - **Score « à farmer »** : or/jour × (1 + 3 × tendance, borné entre 0,5 et 1,5) × signaux (pénurie ×1,2, demande ×1,1, afflux ×0,8, stock lourd ×0,75, dominé ×0,85). Le tout est pondéré par la confiance dans le volume, v / (v + 3) où v = unités vues vendues : une seule vente observée ne place plus un objet en tête.
 
 ## Fiabilité d'un prix (« se vend-il vraiment à ce prix ? »)

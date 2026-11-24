@@ -275,11 +275,17 @@ function Analysis.ItemStats(db, id, today)
   if w.sold + w.exp > 0 then s.sellThrough = (w.sold + 2) / (w.sold + w.exp + 3) end
   -- Ce que rapporte vraiment une unité mise en vente : prix - commission - dépôts perdus sur les
   -- mises en vente qui expirent (en moyenne (1 - écoulement) / écoulement remises en vente)
-  s.net = s.price * (1 - Analysis.AH_CUT)
+  -- Correction par tes ventes réelles (Ledger.BiasTable) : s.price reste le prix du marché, mais ce
+  -- qu'une vente te rapporte est multiplié par s.bias (≤ 1). Voir Ledger.BIAS_*.
+  if ns.Ledger and ns.Ledger.BiasFor then
+    s.bias, s.biasN, s.biasSrc = ns.Ledger.BiasFor(Analysis.biasT, id)
+  end
+  s.bias = s.bias or 1
+  s.net = s.price * (1 - Analysis.AH_CUT) * s.bias
   s.deposit = (s.vendorSell or 0) * Analysis.DEPOSIT_RATE
   local st = math.max(s.sellThrough or 0.67, 0.1)
   s.netExp = s.net - s.deposit * (1 - st) / st
-  if s.spike then s.netSafe = s.usual * (1 - Analysis.AH_CUT) - s.deposit * (1 - st) / st end
+  if s.spike then s.netSafe = s.usual * (1 - Analysis.AH_CUT) * s.bias - s.deposit * (1 - st) / st end
   s.gpd = s.perDay and math.max(Analysis.SafeNet(s), 0) * s.perDay or 0   -- or que ce marché rapporte par jour
 
   -- Concurrence (dernier scan)
@@ -333,6 +339,7 @@ function Analysis.All()
   local db = ns.realmDB()
   local today = History.today()
   if ns.Rebound then ns.Rebound.Update(db, today) end
+  Analysis.biasT = ns.Ledger and ns.Ledger.BiasTable and ns.Ledger.BiasTable(db) or nil
   local list, byId = {}, {}
   for id in pairs(db.hist or {}) do
     local s = Analysis.ItemStats(db, id, today)
@@ -365,14 +372,19 @@ function Analysis.RealSales()
   return by
 end
 
-function Analysis.VendorFlip(id, s, v, real)
+function Analysis.VendorFlip(id, s, v, real, budget)
   if not (s and v and v.p and v.p > 0) then return nil end  -- relevé PNJ absent ou arrondi à 0c (ancienne version)
   local margin = Analysis.SafeNet(s) - v.p                  -- commission et dépôts perdus déduits, hors pic
   if margin < 1 then return nil end
   local cap = (v.lim and v.lim > 0) and v.lim or math.huge
   local vol = math.min((s.perDay or 0) * Analysis.VENDOR_SHARE, cap)
+  -- ton budget plafonne ce que tu peux acheter d'un coup chez le marchand
+  local afford = budget and math.floor(budget / v.p) or nil
+  if afford and afford < 1 then return nil end
+  local budgetCut = afford and afford < vol or nil
+  if budgetCut then vol = afford end
   local e = { id = id, s = s, buy = v.p, margin = margin, roi = margin / v.p, markup = s.price / v.p,
-              perDay = s.perDay, vol = vol, npc = v.npc, zone = v.zone, lim = v.lim }
+              perDay = s.perDay, vol = vol, npc = v.npc, zone = v.zone, lim = v.lim, budgetCut = budgetCut }
   local why = {}
   if not s.realPrice then why[#why + 1] = "aucune vente vue à ce prix" end
   if (s.days or 0) < Analysis.VENDOR_MIN_DAYS then why[#why + 1] = ("%d j de données"):format(s.days or 0) end
@@ -388,7 +400,7 @@ function Analysis.VendorFlip(id, s, v, real)
   end
   e.reliable = #why == 0
   e.why = table.concat(why, ", ")
-  if not e.reliable then e.testQty = math.max(1, math.min(20, math.ceil(vol))) end
+  if not e.reliable then e.testQty = math.max(1, math.min(20, math.ceil(vol), afford or 20)) end
   e.gpd = margin * vol * (s.confidence or 1) * (e.reliable and 1 or 0.5)
   return e
 end
@@ -397,8 +409,9 @@ function Analysis.VendorFlips()
   local db, out = ns.realmDB(), {}
   local all = Analysis.All().byId
   local real = Analysis.RealSales()
+  local budget = Analysis.Budget()
   for id, v in pairs(db.vendor or {}) do
-    local e = Analysis.VendorFlip(id, all[id], v, real)
+    local e = Analysis.VendorFlip(id, all[id], v, real, budget)
     if e then out[#out + 1] = e end
   end
   return out
@@ -437,6 +450,31 @@ function Analysis.FarmZones()
   return out
 end
 
+-- Ton or. Relevé à chaque changement (PLAYER_MONEY) et gardé par personnage : à la déconnexion, quand
+-- le rapport est enregistré, GetMoney() peut déjà renvoyer 0 (le rapport du 24/11/2026 disait « Or : 0c »).
+-- Budget d'un conseil d'achat (flip, achat PNJ) : BUDGET_SHARE de ton or, pour ne jamais tout miser sur
+-- une seule opération. Chaque conseil est plafonné séparément. nil = or inconnu, pas de plafond.
+Analysis.BUDGET_SHARE = 0.5
+
+function Analysis.SaveGold()
+  if not (GetMoney and ns.Prof) then return end
+  local c = ns.Prof.Char()
+  c.money, c.moneyT = GetMoney(), time()
+end
+ns.on("PLAYER_LOGIN", function() Analysis.SaveGold() end)
+ns.on("PLAYER_MONEY", function() Analysis.SaveGold() end)
+
+function Analysis.Gold()
+  local c = ns.Prof and ns.Prof.Char()
+  if c and c.money then return c.money, c.moneyT end
+  if GetMoney then return GetMoney(), time() end
+end
+
+function Analysis.Budget()
+  local g = Analysis.Gold()
+  return g and math.floor(g * Analysis.BUDGET_SHARE) or nil
+end
+
 -- Parcourt le carnet d'ordres du moins cher au plus cher, jusqu'à cap unités. Pour chaque quantité :
 -- fn(quantité, coût, prix max payé, prochaine enchère qui restera en vente après nos achats)
 -- (et sans dépasser maxCost d'achat au total, s'il est donné)
@@ -461,9 +499,11 @@ end
 --   d'après les creux passés de l'objet (ns.Rebound). Tant qu'ils sont inconnus : une chance sur deux,
 --   et on n'achète qu'une demi-journée de ventes (20 unités et 20 po au plus), pour apprendre.
 -- Revendre tout de suite passe avant stocker quand les deux sont possibles.
-function Analysis.FlipFor(s, book, odds)
+function Analysis.FlipFor(s, book, odds, budget)
   if not (s and book and s.realPrice and s.perDay and s.perDay >= 1) then return nil end
-  local target = s.realPrice
+  if budget and budget < 1 then return nil end
+  -- revente au prix réel corrigé par tes ventes réelles (s.bias, Ledger.BiasTable)
+  local target = s.realPrice * (s.bias or 1)
   if s.avg7 and s.avg7 < target then target = s.avg7 end -- prudence : on ne revend pas au-dessus du prix affiché moyen
   if s.spike and s.usual < target then target = s.usual end -- ni au prix d'un pic qui peut retomber avant la revente
   local st = math.max(s.sellThrough or 0.67, 0.1)
@@ -471,15 +511,21 @@ function Analysis.FlipFor(s, book, odds)
   local function net(p) return p * (1 - Analysis.AH_CUT) - depLoss end
   local levels = book.levels
 
+  -- plafond d'achat : quantité qui se revend en 2 jours, et ton budget (Analysis.Budget)
+  local fullCap = math.floor(s.perDay * Analysis.FLIP_HOLD_DAYS)
+  local fullCost = 0
+  walkBook(levels, fullCap, function(_, cost) fullCost = cost end)
+  local budgetCut = budget and fullCost > budget or false
   local now
-  walkBook(levels, math.floor(s.perDay * Analysis.FLIP_HOLD_DAYS), function(qty, cost, maxBuy, nextP)
+  walkBook(levels, fullCap, function(qty, cost, maxBuy, nextP)
     local resale = math.min(target, nextP and (nextP - 1) or target)
     local profit = net(resale) * qty - cost
     if profit > 0 and (not now or profit > now.profit) then
       now = { kind = "now", id = s.id, s = s, qty = qty, cost = cost, maxBuy = maxBuy, resale = resale,
-              profit = profit, roi = profit / math.max(cost, 1), days = qty / s.perDay, name = s.name }
+              profit = profit, roi = profit / math.max(cost, 1), days = qty / s.perDay, name = s.name,
+              budgetCut = budgetCut or nil }
     end
-  end)
+  end, budget)
   if now and now.roi >= Analysis.FLIP_MIN_ROI and now.profit >= Analysis.FLIP_MIN_PROFIT then return now end
 
   if odds == nil and ns.Rebound then odds = ns.Rebound.Now(ns.realmDB(), s.id) end
@@ -494,6 +540,7 @@ function Analysis.FlipFor(s, book, odds)
   local cap = odds.known and math.floor(s.perDay * Analysis.FLIP_HOLD_DAYS)
     or math.min(Analysis.FLIP_TEST_MAX_QTY, math.max(1, math.floor(s.perDay * Analysis.FLIP_TEST_DAYS)))
   local maxCost = not odds.known and Analysis.FLIP_TEST_MAX_COST or nil
+  if budget and (not maxCost or budget < maxCost) then maxCost = budget end
   local stock
   walkBook(levels, cap, function(qty, cost, maxBuy, nextP)
     local nowAt = math.min(target, nextP and (nextP - 1) or target)
@@ -505,7 +552,7 @@ function Analysis.FlipFor(s, book, odds)
                 resaleNow = nowAt, ifUp = ifUp, ifDown = ifDown, profit = profit, roi = profit / math.max(cost, 1),
                 rate = odds.rate, wait = odds.wait, slow = odds.slow, events = odds.n, recovered = odds.ok, known = odds.known,
                 weekday = odds.weekday, ref = odds.ref, name = s.name,
-                days = (odds.wait or 0) + qty / s.perDay }
+                days = (odds.wait or 0) + qty / s.perDay, budgetCut = budgetCut or nil }
     end
   end, maxCost)
   if stock and stock.roi >= Analysis.FLIP_STORE_MIN_ROI and stock.profit >= Analysis.FLIP_MIN_PROFIT then return stock end
@@ -522,13 +569,19 @@ function Analysis.Flips()
   local db, out = ns.realmDB(), {}
   if not db.book then return out end
   local mine = ns.Ledger and ns.Ledger.Holds and ns.Ledger.Holds() or {}
+  local budget = Analysis.Budget()
+  local over = 0   -- flips rentables mais hors de ton budget
   for id, s in pairs(Analysis.All().byId) do
-    local f = Analysis.FlipFor(s, ns.Scan.UnpackBook(db.book[id]))
+    local book = ns.Scan.UnpackBook(db.book[id])
+    local f = Analysis.FlipFor(s, book, nil, budget)
     if f then
       f.mine = mine[id]
       out[#out + 1] = f
+    elseif budget and Analysis.FlipFor(s, book) then
+      over = over + 1
     end
   end
+  Analysis.flipsOverBudget, Analysis.flipBudget = over, budget
   return out
 end
 
