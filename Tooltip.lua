@@ -75,6 +75,12 @@ local function craftUpLines(id)
   return head, table.concat(d, " · ")
 end
 
+local GRAYT = "|cff999999"
+local function join(t, sep) return table.concat(t, sep or " · ") end
+local function signed(v) return (v >= 0 and "+" or "-") .. ns.money(math.abs(v)) end
+
+-- Infobulle complète, regroupée : l'action d'abord, puis une ligne par thème
+-- (prix, repères, tendance, marché, opportunités, métiers, toi), la qualité des données en pied.
 local function build(id)
   local db = ns.realmDB()
   local s = ns.Analysis.Get(id)
@@ -84,99 +90,102 @@ local function build(id)
   local function kv(a, b) L[#L + 1] = { a, b } end
   local function line(text, r, g, b) L[#L + 1] = { text, r = r or 1, g = g or 1, b = b or 1 } end
 
-  -- HV ou PNJ : en tête, lisible d'un coup d'œil
+  -- 1. Quoi faire : HV ou PNJ, fabrique-le plutôt, conseil de marché (rempli plus bas, une fois le rôle connu)
   local cmp = ns.Bags and ns.Bags.Compare(id)
   if cmp then
     local head, detail = ns.Bags.CompareText(cmp)
-    local c = ns.Bags.COLORS[cmp.kind]
-    L[#L + 1] = { head, detail, color = c }
+    L[#L + 1] = { head, detail, color = ns.Bags.COLORS[cmp.kind] }
   end
   local up, upDetail = craftUpLines(id)
   if up then L[#L + 1] = { up, upDetail, color = { 1, 0.6, 0 } } end
-  -- Se vend vraiment ? (ventes sûres, écoulement, tes courriers)
-  local sells, sellsWhy = ns.Analysis.Sells(s, ns.Analysis.RealSales()[id])
-  if s or sells ~= "unknown" or sellsWhy:find("chez toi") then
-    kv("Se vend à l'HV ?", ns.Analysis.SELLS_LABEL[sells])
-    if sellsWhy ~= "" then line("  " .. sellsWhy, 0.6, 0.6, 0.6) end
-  end
+  local verdictAt = #L + 1
+  L[verdictAt] = false -- réservé
 
-  -- Prix
+  -- 2. Prix /u : le moins cher maintenant, ce qui part vraiment, ce qui te reste
   if s then
-    line(("Données : %d j, %.0f h de marché observées, confiance volume %.0f%%"):format(
-      s.days or 0, s.obsHours or 0, (s.confidence or 0) * 100), 0.6, 0.6, 0.6)
+    local p = {}
     if s.minNow then
-      local vs = s.vsAvg and ("  (%s vs moy. 7 j)"):format(ns.pct(s.vsAvg)) or ""
-      kv("Achat le moins cher /u", ns.money(s.minNow) .. vs)
+      p[#p + 1] = ns.money(s.minNow) .. (s.vsAvg and (" (%s vs moy.)"):format(ns.pct(s.vsAvg)) or "")
     end
-    if s.avg7 then kv("Prix affiché moyen 7 j /u", ns.money(s.avg7)) end
-    kv("Prix réel de vente /u", s.realPrice and ns.money(s.realPrice) or "|cff808080trop peu de ventes vues|r")
-    if s.ev and s.ev.maxSold then
-      kv("Plus haut prix vu vendu /u", ns.money(s.ev.maxSold) .. (s.capped and ("  |cffff8040(affiché %s)|r"):format(ns.money(s.listedPrice)) or ""))
-    end
-    if s.trust then kv("Fiabilité du prix", ns.Trust.LABEL[s.trust] .. " · " .. (s.trustWhy or "")) end
-    kv("Net /u (commission, dépôts)", ns.money(s.netExp))
-    if s.bias and s.bias < 0.995 then
-      kv("Correction par tes ventes", ("×%.2f  |cff808080(%s, %d vente%s)|r"):format(s.bias,
-        s.biasSrc == "objet" and "cet objet" or "toutes tes ventes", s.biasN or 0, (s.biasN or 0) > 1 and "s" or ""))
-    end
+    p[#p + 1] = "réel " .. (s.realPrice and ns.money(s.realPrice) or "|cff808080?|r")
+    local net = "net " .. ns.money(s.netExp)
+    if s.bias and s.bias < 0.995 then net = net .. (" %s(×%.2f tes ventes)|r"):format(GRAYT, s.bias) end
+    p[#p + 1] = net
+    kv("Prix /u", join(p))
     if s.spike then
       kv("Pic de prix", ("habituel %s · |cffff8040vends ce que tu as, n'investis pas|r"):format(ns.money(s.usual)))
     end
-    if meta and meta.s and meta.s > 0 then kv("Rachat par le PNJ /u", ns.money(meta.s)) end
+    -- Repères : moyenne, plus haut vendu, PNJ
+    local r = {}
+    if s.avg7 then r[#r + 1] = "moy. 7 j " .. ns.money(s.avg7) end
+    if s.ev and s.ev.maxSold then
+      r[#r + 1] = "haut vendu " .. ns.money(s.ev.maxSold)
+        .. (s.capped and (" |cffff8040(affiché %s)|r"):format(ns.money(s.listedPrice)) or "")
+    end
+    if meta and meta.s and meta.s > 0 then r[#r + 1] = "PNJ rachète " .. ns.money(meta.s) end
+    if #r > 0 then kv("Repères /u", join(r)) end
   else
     line("Pas de marché HV observé récemment", 0.6, 0.6, 0.6)
   end
   if vendor and vendor.p and vendor.p > 0 then
-    kv("Achat chez un PNJ /u", ("%s  (%s, %s)"):format(ns.money(vendor.p), vendor.npc or "?", vendor.zone or "?"))
+    kv("PNJ vend /u", ("%s  %s(%s, %s)|r"):format(ns.money(vendor.p), GRAYT, vendor.npc or "?", vendor.zone or "?"))
   end
 
+  local book
   if s then
-    -- Tendances
-    kv("Tendance 24 h", trendText(s.trend24, s.n24 and (" /j  (%d scans, %.0f h)"):format(s.n24, s.span24) or nil))
-    kv("Tendance 7 j" .. (s.trendSrc and " (Auctionator)" or ""), trendText(s.trend, " /j"))
-    -- Volume et concurrence
-    if s.perDay then kv("Vendus /jour (estim.)", ("%.0f  (stock moyen %.0f)"):format(s.perDay, s.stock or 0)) end
-    if s.relistPerDay and s.relistPerDay >= 1 then kv("Relistes écartés /jour", ("%.0f"):format(s.relistPerDay)) end
-    local parts = {}
-    if s.sellThrough then parts[#parts + 1] = ("%.0f%% vendues"):format(s.sellThrough * 100) end
-    if s.stockDays then parts[#parts + 1] = ("%.1f j de stock"):format(s.stockDays) end
-    if s.sellers then parts[#parts + 1] = ("%d vendeurs (top %.0f%%)"):format(s.sellers, (s.topShare or 0) * 100) end
-    if #parts > 0 then kv("Écoulement", table.concat(parts, " · ")) end
-    local book = db.book and ns.Scan.UnpackBook(db.book[id])
-    local qty, n, first = bookSummary(book)
-    if qty then kv(("En vente : %d u, %d prix"):format(qty, n), first) end
-    if s.demandChg or s.stockChg then
-      kv("Demande / stock (3 j vs avant)", ("%s / %s"):format(ns.pct(s.demandChg), ns.pct(s.stockChg)))
+    -- 3. Tendance : court terme, 7 j, et plusieurs mois si l'archive le permet
+    kv("Tendance", ("24 h %s · 7 j%s %s"):format(trendText(s.trend24, " /j"),
+      s.trendSrc and " (Auct.)" or "", trendText(s.trend, " /j")))
+    local lt = ns.History.LongTerm and ns.History.LongTerm(db, id)
+    if lt then
+      local vs = s.price and (" · maintenant %s"):format(ns.pct(s.price / lt.avg - 1)) or ""
+      kv(("Sur %d semaines"):format(lt.weeks), ("moy. %s · %s (%s) → %s (%s)%s"):format(
+        ns.money(lt.avg), ns.money(lt.lo), date("%d/%m", lt.loT), ns.money(lt.hi), date("%d/%m", lt.hiT), vs))
     end
 
-    -- Opportunités
+    -- 4. Marché : se vend-il, à quel rythme, contre qui
+    local sells, sellsWhy = ns.Analysis.Sells(s, ns.Analysis.RealSales()[id])
+    kv("Se vend ?", ns.Analysis.SELLS_LABEL[sells])
+    if sellsWhy ~= "" then line("  " .. sellsWhy, 0.6, 0.6, 0.6) end
+    local m = {}
+    if s.perDay then m[#m + 1] = ("%.0f/j"):format(s.perDay) end
+    if s.stock then
+      m[#m + 1] = ("stock %.0f"):format(s.stock) .. (s.stockDays and (" (%.1f j)"):format(s.stockDays) or "")
+    end
+    if s.sellers then m[#m + 1] = ("%d vendeurs (top %.0f%%)"):format(s.sellers, (s.topShare or 0) * 100) end
+    if s.relistPerDay and s.relistPerDay >= 1 then m[#m + 1] = ("%.0f relistes/j"):format(s.relistPerDay) end
+    if s.demandChg or s.stockChg then
+      m[#m + 1] = ("3 j : demande %s, stock %s"):format(ns.pct(s.demandChg), ns.pct(s.stockChg))
+    end
+    if #m > 0 then kv("Marché", join(m)) end
+    book = db.book and ns.Scan.UnpackBook(db.book[id])
+    local qty, n, first = bookSummary(book)
+    if qty then kv(("En vente : %d u, %d prix"):format(qty, n), first) end
+
+    -- 5. Opportunités : flips HV, PNJ → HV
     local f = book and ns.Analysis.FlipFor(s, book, nil, ns.Analysis.Budget())
+    local fd = {}
     if f and f.kind == "stock" then
-      line(("Flip à stocker : acheter %d jusqu'à %s, revendre %s quand le prix remonte → ~+%s espéré"):format(
+      line(("Flip à stocker : acheter %d jusqu'à %s, revendre %s → ~+%s espéré"):format(
         f.qty, ns.money(f.maxBuy), ns.money(f.resale), ns.money(f.profit)), 0.4, 0.8, 1)
       if f.known then
-        line(("  %d creux sur %d remontés, en ~%s j (lent : %s j) ; sans rebond %s"):format(f.recovered, f.events,
-          tostring(f.wait or "?"), tostring(f.slow or "?"), ((f.ifDown >= 0 and "+" or "") .. ns.money(f.ifDown))), 0.7, 0.7, 0.7)
+        fd[#fd + 1] = ("%d creux sur %d remontés, en ~%s j (lent %s j), sans rebond %s"):format(f.recovered, f.events,
+          tostring(f.wait or "?"), tostring(f.slow or "?"), (f.ifDown >= 0 and "+" or "") .. ns.money(f.ifDown))
       else
-        line(("  Rebond encore inconnu (%d creux vus) : teste petit ; sans rebond %s"):format(
-          f.events or 0, ((f.ifDown >= 0 and "+" or "") .. ns.money(f.ifDown))), 1, 0.6, 0)
+        fd[#fd + 1] = ("|cffff9900rebond inconnu (%d creux vus), teste petit|r, sans rebond %s"):format(
+          f.events or 0, (f.ifDown >= 0 and "+" or "") .. ns.money(f.ifDown))
       end
       if f.weekday then
-        line(("  Meilleur jour pour vendre : %s (+%.0f %%)"):format(f.weekday.name, f.weekday.gain * 100), 0.7, 0.7, 0.7)
+        fd[#fd + 1] = ("Meilleur jour pour vendre : %s (+%.0f %%)"):format(f.weekday.name, f.weekday.gain * 100)
       end
     elseif f then
       line(("Flip : acheter %d jusqu'à %s, revendre tout de suite %s → +%s (ROI %.0f%%)"):format(
         f.qty, ns.money(f.maxBuy), ns.money(f.resale), ns.money(f.profit), f.roi * 100), 0.4, 1, 0.4)
     end
     if f and f.budgetCut then
-      line(("  Quantité limitée par ton or (budget %s, %.0f %% de ton or)"):format(
-        ns.money(ns.Analysis.Budget() or 0), ns.Analysis.BUDGET_SHARE * 100), 0.7, 0.7, 0.7)
+      fd[#fd + 1] = ("limité par ton or (budget %s)"):format(ns.money(ns.Analysis.Budget() or 0))
     end
-    local held = ns.Ledger.Holds()[id]
-    if held and held.units > 0 then
-      line(("Tes reventes : %d achetés puis revendus, gardés ~%.1f j, %s/u"):format(
-        held.units, held.days, (held.profit >= 0 and "+" or "-") .. ns.money(math.abs(held.profit))), 0.7, 0.7, 0.7)
-    end
+    if #fd > 0 then line("  " .. join(fd), 0.7, 0.7, 0.7) end
     local vf = vendor and ns.Analysis.VendorFlip(id, s, vendor, ns.Analysis.RealSales(), ns.Analysis.Budget())
     if vf then
       if vf.reliable then
@@ -186,23 +195,27 @@ local function build(id)
           1, 0.6, 0)
       end
     end
+  else
+    local sells, sellsWhy = ns.Analysis.Sells(s, ns.Analysis.RealSales()[id])
+    if sells ~= "unknown" or sellsWhy:find("chez toi") then
+      kv("Se vend ?", ns.Analysis.SELLS_LABEL[sells])
+      if sellsWhy ~= "" then line("  " .. sellsWhy, 0.6, 0.6, 0.6) end
+    end
   end
 
-  -- Métiers : ce que tu fabriques avec, ou ce que ça te coûte à fabriquer
+  -- 6. Métiers : ce que tu fabriques avec, ou ce que ça te coûte à fabriquer
   local role = {}
   if ns.Prof then
     for prof, list in pairs(ns.Prof.Recipes()) do
-      local r = list[id]
-      if r then
+      if list[id] then
         for _, c in ipairs(ns.Analysis.Crafts()) do
           if c.id == id and c.prof == prof then
             if c.cost then
               if c.profit and c.profit > 0 then role.crafted = true end
-              line(("Tu le fabriques : coût %s, bénéfice %s (%s)"):format(ns.money(c.cost), ns.money(c.profit), c.sellTo or "?"),
-                0.6, 0.9, 1)
-              if c.slow and (c.ahValue or 0) > c.vendorValue then
-                line(("  HV écartée : %s, vends plutôt les composants"):format(c.slowWhy), 1, 0.6, 0.2)
-              end
+              local slow = c.slow and (c.ahValue or 0) > c.vendorValue
+                and (" |cffff9933· HV écartée : %s, vends plutôt les composants|r"):format(c.slowWhy) or ""
+              line(("Tu le fabriques : coût %s, bénéfice %s (%s)%s"):format(ns.money(c.cost), ns.money(c.profit),
+                c.sellTo or "?", slow), 0.6, 0.9, 1)
             else
               line(("Tu le fabriques (%d composants sans prix)"):format(c.missing), 0.6, 0.9, 1)
             end
@@ -226,7 +239,7 @@ local function build(id)
       line("Tu peux le dépecer", 0.6, 0.9, 1)
     end
 
-    -- Ton stock et ton conseil
+    -- 7. Toi : ton stock et ton conseil
     local c = ns.Prof.Char()
     local nb, nk = (c.bags or {})[id] or 0, (c.bank or {})[id] or 0
     if nb + nk > 0 then
@@ -240,19 +253,34 @@ local function build(id)
     end
   end
 
-  -- Tes ventes réelles (courriers d'HV)
+  -- Tes ventes réelles (courriers d'HV) et tes reventes, sur une ligne
   local real = ns.Analysis.RealSales()[id]
+  local held = s and ns.Ledger.Holds()[id]
+  local me = {}
   if real and (real.sold + real.bought + real.expired) > 0 then
-    kv(("Toi, %d j"):format(ns.Ledger.DAYS), ("%d vendus%s, %d expirés, %d achetés"):format(
-      real.sold, real.avgSale and (" à " .. ns.money(real.avgSale)) or "", real.expired, real.bought))
+    me[#me + 1] = ("%d vendus%s, %d expirés, %d achetés"):format(
+      real.sold, real.avgSale and (" à " .. ns.money(real.avgSale)) or "", real.expired, real.bought)
   end
+  if held and held.units > 0 then
+    me[#me + 1] = ("reventes %d u en ~%.1f j, %s/u"):format(held.units, held.days, signed(held.profit))
+  end
+  if #me > 0 then kv(("Toi, %d j"):format(ns.Ledger.DAYS), join(me)) end
 
+  -- Conseil de marché (en tête) + signaux ; qualité des données en pied
+  local v
   if s then
-    local v = verdict(s, role)
-    if v then line(v) end
+    v = verdict(s, role)
     local sig = {}
     for _, x in ipairs(s.signals) do if x ~= "hausse" and x ~= "baisse" then sig[#sig + 1] = x end end
-    if #sig > 0 then line(table.concat(sig, " · "), 1, 0.82, 0) end
+    if #sig > 0 then v = (v and (v .. "  ") or "") .. "|cffffd100" .. join(sig) .. "|r" end
+  end
+  if v then L[verdictAt] = { v, r = 1, g = 1, b = 1 } else table.remove(L, verdictAt) end
+  if s then
+    local q = ("Données : %d j, %.0f h observées, confiance volume %.0f%%"):format(
+      s.days or 0, s.obsHours or 0, (s.confidence or 0) * 100)
+    if s.trust then q = q .. " · prix " .. ns.Trust.LABEL[s.trust] .. (s.trustWhy and (" (" .. s.trustWhy .. ")") or "") end
+    if s.n24 then q = q .. (" · 24 h : %d scans sur %.0f h"):format(s.n24, s.span24) end
+    line(q, 0.6, 0.6, 0.6)
   end
   if not s and #L == 1 then return {} end -- rien d'autre à dire qu'« aucun marché » : on n'encombre pas
   return L

@@ -241,7 +241,7 @@ GameTooltip.scripts.OnTooltipSetItem(GameTooltip)
 """)
 tt = [strip(re.sub(r"\|T[^|]*\|t", "", x)) for x in lua.eval("TT").values()]
 print("\n".join(tt))
-assert any(x.startswith("Tendance 24 h = +") for x in tt), tt
+assert any(x.startswith("Tendance = 24 h +") for x in tt), tt
 
 # Conseiller d'inventaire : soie en hausse -> garder ; tisse-mage en baisse -> vendre sous l'enchère la moins chère
 lua.execute("""
