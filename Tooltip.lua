@@ -70,7 +70,7 @@ local function craftUpLines(id)
   if u.others > 0 then d[#d + 1] = "autres composants " .. ns.money(u.others) end
   if u.learnCost then d[#d + 1] = "recette à apprendre (" .. ns.money(u.learnCost) .. ")" end
   if u.unitsPerDay then d[#d + 1] = ("l'HV en absorbe ~%.0f/j"):format(u.unitsPerDay) end
-  if u.slow then d[#d + 1] = "se vend peu" end
+  if u.slow then d[#d + 1] = u.slowWhy or "se vend peu" end
   if u.unsure then d[#d + 1] = "prix affiché, aucune vente vue" end
   return head, table.concat(d, " · ")
 end
@@ -186,6 +186,9 @@ local function build(id)
               if c.profit and c.profit > 0 then role.crafted = true end
               line(("Tu le fabriques : coût %s, bénéfice %s (%s)"):format(ns.money(c.cost), ns.money(c.profit), c.sellTo or "?"),
                 0.6, 0.9, 1)
+              if c.slow and (c.ahValue or 0) > c.vendorValue then
+                line(("  HV écartée : %s, vends plutôt les composants"):format(c.slowWhy), 1, 0.6, 0.2)
+              end
             else
               line(("Tu le fabriques (%d composants sans prix)"):format(c.missing), 0.6, 0.9, 1)
             end

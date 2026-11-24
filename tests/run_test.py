@@ -305,12 +305,12 @@ end""")(ns)
 print("Objet qui se vend peu :", slow)
 assert slow == ("Garder", "PNJ"), slow
 
-# Artisanat : classé par or/jour possible (bénéfice × part du marché)
+# Artisanat : classé par or/jour possible (bénéfice × part des ventes sûres du marché)
 crafts = [e for e in ns.Analysis.Crafts().values() if e.profit is not None]
 for e in crafts:
     assert e.daily is not None and e.vol is not None
     if e.sellTo == "HV":
-        assert abs(e.vol - (e.perDay or 0) * 0.25) < 1e-6
+        assert not e.sale.slow and abs(e.vol - (e.sale.rate or 0) * 0.25 / e.made) < 1e-6
 
 # Mes enchères en cours (API moderne simulée) : sous-cotée, vendue
 mine = lua.eval("""function(ns)
@@ -866,7 +866,8 @@ up = lua.eval("""function(ns)
   local realGet, realRecipes = A.Get, P.Recipes
   local stats = {
     [999201] = { id = 999201, netExp = 100, perDay = 20, realPrice = 110, price = 110, minNow = 110, signals = {} },  -- composant : 1 pa brut
-    [999202] = { id = 999202, netExp = 1000, perDay = 8, realPrice = 1050, signals = {} }, -- objet fabriqué : 10 pa
+    [999202] = { id = 999202, netExp = 1000, perDay = 8, surePerDay = 8, realPrice = 1050, price = 1050,
+                 deposit = 0, sellThrough = 1, signals = {} }, -- objet fabriqué : 10 pa net (1050 − 5 %)
     [999203] = { id = 999203, netExp = 30, minNow = 30, perDay = 50, signals = {} },       -- autre composant : 30c
   }
   A.Get = function(id) return stats[id] or realGet(id) end
@@ -881,16 +882,16 @@ up = lua.eval("""function(ns)
   GameTooltip.scripts.OnTooltipSetItem(GameTooltip)
   local tip = table.concat(TT, "\\n")
   -- objet fabriqué qui ne vaut presque rien : pas d'alerte
-  stats[999202].netExp = 300
+  stats[999202].netExp, stats[999202].price = 300, 316
   local none, weak = A.CraftUp(999201)
   A.Get, P.Recipes = realGet, realRecipes
   AHLedgerDB.items[999201], AHLedgerDB.items[999202] = nil, nil
-  return best.perUnit, best.raw, best.out, adv.action, tip, none, weak and weak.gain
+  return best.perUnit, best.raw, best.out, adv.action, tip, none, weak and weak.gain, A.AH_CUT
 end""")(ns)
-perUnit, raw, out, action, tip, none, weakGain = up
+perUnit, raw, out, action, tip, none, weakGain, upCut = up
 tip = strip(re.sub(r"\|T[^|]*\|t", "", tip))
 print("Fabriquer plutôt :", perUnit, raw, action, [l for l in tip.split("\n") if "plutôt" in l])
-assert abs(perUnit - (1000 - 60) / 3) < 0.01 and raw == 100 and out == 999202, up
+assert abs(perUnit - (1050 * (1 - upCut) - 60) / 3) < 0.01 and raw == 100 and out == 999202, up
 assert action == "Fabriquer", action
 assert "Fabrique-le plutôt : Bracelet" in tip, tip
 assert none is None and weakGain < 0, up
@@ -1260,3 +1261,73 @@ end""")(ns)
 print("Sacs invisibles :", list(us))
 assert us[0] == 1 and abs(us[1] - 0.4) < 1e-9 and us[2] == 1 and us[3] == 1, us
 print("OK : sacs invisibles (fondu de Daylight UI bloqué)")
+
+# Fabriquer pour l'HV (cas réel du 24/11/2026) : 2 Lucky Charm + 10 Medium Leather + 2 Fine Thread → Pilferer's
+# Gloves. Les gants « valaient » 1 po 66 (pic, ventes surtout des relistes), 33 en rayon, aucune vente sûre le
+# dernier jour : ils ne sont pas partis, les Lucky Charm se vendaient dans la journée. Vendre les composants.
+pg = lua.eval("""function(ns)
+  local db, A, P, T = ns.realmDB(), ns.Analysis, ns.Prof, ns.Track
+  local day = ns.History.today()
+  local GL, LC, ML, FT = 7358, 5373, 2319, 2321
+  local saved = { get = A.Get, rec = P.Recipes, days = {}, flips = A.Flips, vflips = A.VendorFlips, bags = ns.Bags.Advice,
+                  min = db.lastMin[GL], book = db.book and db.book[GL], track = db.track }
+  for k = 0, 2 do saved.days[k] = db.days[day - k] end
+  db.days[day - 2] = { obs = 9 * 3600, scans = 2 }
+  db.days[day - 1] = { obs = 9 * 3600, scans = 6 }
+  db.days[day] = { obs = 9 * 3600, scans = 3 }
+  db.hist[GL] = { [day - 2] = "13938,2,17,0,7,0", [day - 1] = "99590,6,106,9,2,149400,0", [day] = "41999,3,71,0,11,0,0,0" }
+  db.book = db.book or {}
+  db.book[GL] = "0,0|9799:1;9800:15;9999:2;15000:4;16000:3;16590:2;16600:6"
+  db.lastMin[GL] = 9799
+  AHLedgerDB.items[GL] = { n = "Pilferer's Gloves", s = 885, q = 2, c = 4 }
+  AHLedgerDB.items[LC] = { n = "Lucky Charm", s = 72, q = 1, c = 15 }
+  local mats = {
+    [LC] = { id = LC, price = 1346, minNow = 1346, realPrice = 1300, netExp = 1240, perDay = 30, surePerDay = 20, signals = {} },
+    [ML] = { id = ML, price = 99, minNow = 99, netExp = 90, perDay = 300, signals = {} },
+    [FT] = { id = FT, price = 40, minNow = 40, netExp = 35, perDay = 300, signals = {} },
+  }
+  A.Get = function(id) return mats[id] or saved.get(id) end
+  P.Recipes = function() return { leatherworking = { [GL] = { n = "Pilferer's Gloves", m = 1, d = "trivial",
+                                   r = { [ML] = 10, [LC] = 2, [FT] = 2 } } } } end
+  ns.dataVersion = ns.dataVersion + 1
+  local s = A.Get(GL)
+  local sale = A.CraftSale(s)
+  local craft
+  for _, e in ipairs(A.Crafts()) do if e.id == GL then craft = e end end
+  local up, upWeak = A.CraftUp(LC)
+  -- suivi des conseils : les gants ne sont pas un « Artisanat → HV » à vérifier
+  A.Flips, A.VendorFlips, ns.Bags.Advice = function() return {} end, function() return {} end, function() return {} end
+  local tdb = { book = {} }
+  T.OnScan(tdb, 3000000, nil)
+  local tracked = tdb.track and tdb.track.open[GL .. ":craft"] ~= nil
+  -- même recette sur un marché sain (20 ventes sûres/j, 4 en rayon, 1 po 20) : fabriquer
+  db.hist[GL] = { [day - 2] = "24000,2,8,40,0,480000,0", [day - 1] = "72000,6,24,40,0,480000,0", [day] = "36000,3,12,40,0,480000,0,0" }
+  db.book[GL] = "0,0|12000:4"
+  db.lastMin[GL] = 12000
+  ns.dataVersion = ns.dataVersion + 1
+  local healthy = A.CraftSale(A.Get(GL))
+  local upOk = A.CraftUp(LC)
+  local tdb2 = { book = {} }
+  local craft2
+  for _, e in ipairs(A.Crafts()) do if e.id == GL then craft2 = e end end
+  T.OnScan(tdb2, 3000000, nil)
+  local rec2 = tdb2.track and tdb2.track.open[GL .. ":craft"]
+  -- remise en état
+  A.Get, P.Recipes, A.Flips, A.VendorFlips, ns.Bags.Advice = saved.get, saved.rec, saved.flips, saved.vflips, saved.bags
+  for k = 0, 2 do db.days[day - k] = saved.days[k] end
+  db.hist[GL], db.book[GL], db.lastMin[GL] = nil, saved.book, saved.min
+  AHLedgerDB.items[GL], AHLedgerDB.items[LC] = nil, nil
+  ns.dataVersion = ns.dataVersion + 1
+  return sale.slow, sale.gross, sale.why, sale.rate, craft.sellTo, craft.slow, craft.daily, up == nil,
+         upWeak and upWeak.sellTo, tracked, healthy.slow, upOk and upOk.out, rec2 and rec2.resale, s.price
+end""")(ns)
+print("Pilferer's Gloves vs Lucky Charm :", list(pg))
+assert pg[0] is True and pg[1] <= 9798 and pg[3] == 0, pg       # aucune vente sûre le dernier jour, sous les 97s 99c
+assert "se vend peu" in pg[2], pg
+assert pg[4] == "PNJ" and pg[5] is True and pg[6] == 0, pg       # l'HV est écartée : rien à gagner par jour
+assert pg[7] is True and pg[8] == "PNJ", pg                       # pas de « Fabriquer » pour les Lucky Charm
+assert pg[9] is False, pg                                        # pas suivi comme conseil d'artisanat
+assert pg[13] > 15000, pg                                        # le prix du jour reste le pic (vendre ce qu'on a)
+assert pg[10] is False and pg[11] == 7358, pg                    # marché sain : fabriquer
+assert pg[12] is not None and pg[12] <= 11999, pg                # suivi au prix où l'on vend, sous l'enchère la moins chère
+print("OK : fabriquer pour l'HV seulement si l'objet partira (ventes sûres, rayon pas saturé)")

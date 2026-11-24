@@ -92,12 +92,13 @@ local function fromVendor(e, now)
            resale = e.s.price, expect = qty * e.margin, n = 0, held = {}, sold = 0 }
 end
 
--- Artisanat rentable à revendre à l'HV : quantité vendable en un jour, au prix du marché
+-- Artisanat rentable à revendre à l'HV : quantité vendable en un jour, au prix où le conseil compte la
+-- vendre (Analysis.CraftSale : prix habituel pendant un pic, sous l'enchère la moins chère), pas au prix du jour
 local function fromCraft(e, now)
   local made = e.made or 1
   local qty = math.min(Track.MAX_QTY, math.max(made, math.ceil((e.vol or 0) * made)))
   return { id = e.id, k = "craft", g = "craft", t = now, till = now + Track.HORIZON.craft * 86400, qty = qty,
-           cost = qty / made * e.cost, resale = e.s.price, expect = qty / made * e.profit, n = 0, held = {}, sold = 0 }
+           cost = qty / made * e.cost, resale = e.post or e.s.price, expect = qty / made * e.profit, n = 0, held = {}, sold = 0 }
 end
 
 -- Conseil des sacs : « Vendre HV » au prix conseillé, ou « PNJ » (l'HV ne vaut pas la peine)

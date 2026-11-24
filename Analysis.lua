@@ -25,6 +25,11 @@ Analysis.FLIP_TEST_MAX_COST = 200000 -- ... ni 20 po d'achat
 Analysis.SPIKE_RATIO = 1.5      -- au-delà de 1,5 × le prix habituel, c'est un pic
 Analysis.SPIKE_MIN_DAYS = 3     -- prix habituel : médiane d'au moins 3 jours (AHLedger, sinon Auctionator)
 Analysis.SPIKE_SETTLE_DAYS = 5  -- un pic qui tient 5 jours est le nouveau prix (comme Rebound.SETTLE_DAYS)
+-- Fabriquer pour l'HV (cas réel des Pilferer's Gloves le 24/11/2026 : 2 Lucky Charm et 10 Medium Leather
+-- transformés en gants qui ne sont pas partis, alors que les composants se vendaient dans la journée)
+Analysis.RECENT_OBS = 6 * 3600       -- ventes récentes : au moins 6 h de marché observées
+Analysis.CRAFT_MIN_SURE_PER_DAY = 0.5 -- ventes sûres par jour mini pour l'objet fabriqué
+Analysis.CRAFT_MAX_BACKLOG_DAYS = 3  -- au-delà de 3 jours de ventes déjà en rayon, ta pièce attendra trop
 
 local History = ns.History
 
@@ -202,6 +207,19 @@ function Analysis.ItemStats(db, id, today)
     s.spike, s.spikeDays = true, highDays
   end
   s.perDay = w.obs > 0 and (w.sold + 0.5 * w.amb) / w.obs * 86400 or nil
+  -- Ventes sûres seulement (sans les ambiguës) : sur 7 jours, et sur les dernières heures observées
+  -- (au moins RECENT_OBS, en remontant depuis aujourd'hui). Sert aux décisions qui prennent des jours.
+  s.surePerDay = w.obs > 0 and w.sold / w.obs * 86400 or nil
+  local rs, ro = 0, 0
+  for d = today, today - 6, -1 do
+    local dr = db.days[d]
+    if dr and dr.obs and dr.obs > 0 then
+      local r = History.parse(h[d])
+      rs, ro = rs + (r and r.sold or 0), ro + dr.obs
+      if ro >= Analysis.RECENT_OBS then break end
+    end
+  end
+  if ro >= Analysis.RECENT_OBS then s.recentSurePerDay = rs / ro * 86400 end
   -- annulations et relistes écartées des ventes (Scan.Diff), pour le rapport et l'infobulle
   s.relistPerDay = w.obs > 0 and w.can > 0 and w.can / w.obs * 86400 or nil
   s.stock = recent.qn > 0 and recent.q / recent.qn or nil
@@ -266,7 +284,12 @@ function Analysis.ItemStats(db, id, today)
 
   -- Concurrence (dernier scan)
   local book = db.book and ns.Scan.UnpackBook(db.book[id])
-  if book then s.sellers, s.topShare = book.sellers, book.top end
+  if book then
+    s.sellers, s.topShare = book.sellers, book.top
+    local q = 0
+    for _, l in ipairs(book.levels or {}) do q = q + l[2] end
+    s.listedNow = q
+  end
   if s.stock and s.perDay and s.perDay > 0 then s.stockDays = s.stock / s.perDay end
 
   -- Signaux
@@ -520,6 +543,34 @@ function Analysis.ReagentCost(id)
   if ah then return ah, "HV" end
 end
 
+-- Un objet fabriqué pour l'HV se vendra-t-il, et à combien ? Ce n'est pas le prix d'aujourd'hui qui
+-- compte mais celui des jours où ta pièce sera en rayon :
+--   prix : le prix habituel pendant un pic, et jamais plus que l'enchère la moins chère (il faut la passer) ;
+--   rythme : ventes sûres seulement (les ambiguës sont souvent des relistes), le plus bas entre 7 jours
+--            et les dernières heures observées (une demande qui s'arrête aujourd'hui compte) ;
+--   attente : ce qui est déjà en rayon (le plus haut entre la moyenne récente et le dernier scan) / ce rythme.
+-- Renvoie { net, gross, rate, backlog, slow, why } par unité, ou nil sans marché observé.
+function Analysis.CraftSale(s)
+  if not s or not s.price then return nil end
+  local gross = s.spike and s.usual or s.price
+  if s.minNow and s.minNow > 0 and s.minNow - 1 < gross then gross = s.minNow - 1 end
+  gross = math.max(gross, 0)
+  local st = math.max(s.sellThrough or 0.67, 0.1)
+  local net = gross * (1 - Analysis.AH_CUT) * (s.bias or 1) - (s.deposit or 0) * (1 - st) / st
+  local rate = s.surePerDay
+  if rate and s.recentSurePerDay then rate = math.min(rate, s.recentSurePerDay) end
+  local stock = math.max(s.stock or 0, s.listedNow or 0)
+  local backlog
+  if rate and rate > 0 then backlog = stock / rate elseif stock > 0 then backlog = math.huge end
+  local why
+  if not rate or rate < Analysis.CRAFT_MIN_SURE_PER_DAY then
+    why = ("se vend peu (%.1f ventes sûres/j)"):format(rate or 0)
+  elseif backlog and backlog > Analysis.CRAFT_MAX_BACKLOG_DAYS then
+    why = ("déjà %d en rayon, ~%.0f j de ventes"):format(math.floor(stock + 0.5), backlog)
+  end
+  return { net = net, gross = gross, rate = rate, backlog = backlog, stock = stock, slow = why ~= nil, why = why }
+end
+
 -- Artisanat : recettes relevées à l'ouverture de tes fenêtres de métier
 Analysis.CRAFT_VENDOR_PER_DAY = 20 -- fabrications par jour qu'on compte pour une recette revendue au PNJ
 function Analysis.Crafts()
@@ -533,18 +584,23 @@ function Analysis.Crafts()
         if c then cost = cost + c * n; if src == "HV" then fromAH = fromAH + 1 end else missing = missing + 1 end
       end
       local made = r.m or 1
-      local value = s and math.max(Analysis.SafeNet(s), 0) * made   -- au prix habituel pendant un pic
+      local sale = Analysis.CraftSale(s)
+      -- valeur à l'HV : au prix où ta pièce peut partir ; aucune si elle ne partira pas (voir CraftSale)
+      local ahValue = sale and math.max(sale.net, 0) * made
+      local value = sale and not sale.slow and ahValue or nil
       local vsell = (AHLedgerDB.items[outId] and AHLedgerDB.items[outId].s or 0) * made
       local e = { id = outId, s = s, prof = prof, name = r.n, made = made, cost = missing == 0 and cost or nil, missing = missing,
-                  value = value, vendorValue = vsell, perDay = s and s.perDay, diff = r.d, spike = s and s.spike }
+                  value = value, ahValue = ahValue, vendorValue = vsell, perDay = s and s.perDay, diff = r.d,
+                  spike = s and s.spike, sale = sale, slow = sale and sale.slow, slowWhy = sale and sale.why,
+                  post = sale and sale.gross }
       if e.cost then
         local best = math.max(value or 0, vsell)
         e.profit = best - e.cost
         e.roi = e.profit / math.max(e.cost, 1)
-        e.sellTo = (value or 0) >= vsell and "HV" or "PNJ"
-        -- ce que la recette peut te rapporter par jour : à l'HV, ta part des ventes du marché
+        e.sellTo = (value or 0) >= vsell and value and "HV" or "PNJ"
+        -- ce que la recette peut te rapporter par jour : à l'HV, ta part des ventes sûres du marché
         -- (une recette rentable que personne n'achète ne rapporte rien) ; au PNJ, une quantité fixe
-        e.vol = e.sellTo == "HV" and (s and s.perDay or 0) * Analysis.VENDOR_SHARE / made or Analysis.CRAFT_VENDOR_PER_DAY
+        e.vol = e.sellTo == "HV" and (sale.rate or 0) * Analysis.VENDOR_SHARE / made or Analysis.CRAFT_VENDOR_PER_DAY
         e.daily = math.max(e.profit, 0) * e.vol
       end
       out[#out + 1] = e
@@ -558,7 +614,6 @@ end
 -- (le mieux entre l'HV nette et le PNJ). Recettes connues, plus celles que tu peux apprendre à ton niveau.
 Analysis.CRAFT_UP_MIN_GAIN = 0.10      -- fabriquer doit rapporter au moins 10 % de plus par composant…
 Analysis.CRAFT_UP_MIN_PER_CRAFT = 20   -- …et au moins 20c de plus par fabrication
-local CRAFT_UP_SLOW = 0.5              -- comme Bags.SLOW_PER_DAY : l'HV risque de ne rien vendre
 
 local function rawValue(id)
   local s = Analysis.Get(id)
@@ -583,7 +638,9 @@ local function craftUpEntry(id, raw, rec, learned, learnCost)
   local so = Analysis.Get(rec.out)
   local meta = AHLedgerDB.items[rec.out]
   local vend = (meta and meta.s or 0) * made
-  local ah = so and math.max(Analysis.SafeNet(so) or 0, 0) * made or 0
+  local sale = Analysis.CraftSale(so)
+  -- l'objet fabriqué ne partira pas à l'HV : seul le PNJ compte (voir CraftSale)
+  local ah = sale and not sale.slow and math.max(sale.net, 0) * made or 0
   local sellTo, value = "HV", ah
   if vend >= ah then sellTo, value = "PNJ", vend end
   if value <= 0 then return nil end
@@ -591,12 +648,13 @@ local function craftUpEntry(id, raw, rec, learned, learnCost)
   local gain = perUnit - raw
   local e = { id = id, out = rec.out, name = rec.name or (meta and meta.n), prof = rec.prof, q = q, made = made,
               others = others, value = value, perUnit = perUnit, raw = raw, gain = gain,
-              gainPct = raw > 0 and gain / raw or nil, sellTo = sellTo, learned = learned, learnCost = learnCost }
+              gainPct = raw > 0 and gain / raw or nil, sellTo = sellTo, learned = learned, learnCost = learnCost,
+              slowWhy = sale and sale.why }
   if sellTo == "HV" then
     e.unsure = so.realPrice == nil
-    e.slow = so.perDay == nil or so.perDay < CRAFT_UP_SLOW
-    -- composants que l'HV absorbe par jour sous forme d'objet fabriqué (ta part du marché)
-    e.unitsPerDay = (so.perDay or 0) * Analysis.VENDOR_SHARE / made * q
+    e.slow = sale.slow
+    -- composants que l'HV absorbe par jour sous forme d'objet fabriqué (ta part des ventes sûres)
+    e.unitsPerDay = (sale.rate or 0) * Analysis.VENDOR_SHARE / made * q
   end
   return e
 end

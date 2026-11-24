@@ -105,9 +105,12 @@ function Plan.CraftCost(rec)
   local s = ns.Analysis.Get(rec.out)
   local meta = AHLedgerDB.items[rec.out]
   local vendor = (meta and meta.s or 0) * made
-  local ah = (s and s.perDay and s.perDay >= 1) and math.max(ns.Analysis.SafeNet(s), 0) * made or 0
+  -- à l'HV seulement si l'objet partira (ventes sûres, rayon pas saturé : Analysis.CraftSale)
+  local sale = ns.Analysis.CraftSale(s)
+  local ok = sale and not sale.slow and (sale.rate or 0) >= 1
+  local ah = ok and math.max(sale.net, 0) * made or 0
   local value = math.max(vendor, ah)
-  local cap = ah > vendor and math.floor((s.perDay or 0) * 2 * ns.Analysis.VENDOR_SHARE / made) or 0
+  local cap = ah > vendor and math.floor(sale.rate * 2 * ns.Analysis.VENDOR_SHARE / made) or 0
   return cost - value, cost, value, vendor, cap
 end
 

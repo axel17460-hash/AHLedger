@@ -121,6 +121,9 @@ function Export.Build()
       add("  pic de prix : %s/u aujourd'hui contre %s d'habitude, valeur comptée au prix habituel",
         g(e.s.price), g(e.s.usual))
     end
+    if e.slow and (e.ahValue or 0) > e.vendorValue then
+      add("  HV écartée (%s) : vends plutôt les composants", e.slowWhy)
+    end
   end
 
   add("")
