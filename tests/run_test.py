@@ -1236,3 +1236,27 @@ assert pk[0] is True and abs(pk[1] - 5000) < 1 and pk[2] > 12000 and pk[3] < 500
 assert pk[6] is None and pk[7] > 13000, pk            # 5 jours au-dessus : plus un pic
 assert pk[8] is True and abs(pk[9] - 5100) < 1, pk    # médiane de 4500, 5000, 5200 et 7000 (la veille, AHLedger d'abord)
 print("OK : pic de prix (valeur d'investissement au prix habituel)")
+
+# Sacs de Daylight UI 2.2.5 restés invisibles (fondu bloqué à 0) : AHLedger remet l'opacité à 1
+us = lua.eval("""function(ns)
+  local function win(a)
+    local items = { a = a }
+    function items:GetAlpha() return self.a end
+    function items:SetAlpha(v) self.a = v end
+    return { items = items, IsVisible = function() return true end, HookScript = function() end }
+  end
+  local stuck, moving, fine = win(0), win(0.4), win(1)
+  local saved = DaylightUI
+  DaylightUI = { GetModule = function() return { ns = { windows = { stuck, moving, fine } } } end }
+  ns.BagMarks.HookShow()
+  ns.BagMarks.Unstick({ [stuck] = 0, [moving] = 0.2 })   -- deuxième relevé : moving a bougé
+  local a1, a2 = stuck.items.a, moving.items.a
+  moving.items.a = 0.4
+  ns.BagMarks.UnstickSoon(); runTimers()                 -- chemin complet : 1 s puis 0,5 s
+  local a3 = moving.items.a
+  DaylightUI = saved
+  return a1, a2, a3, fine.items.a
+end""")(ns)
+print("Sacs invisibles :", list(us))
+assert us[0] == 1 and abs(us[1] - 0.4) < 1e-9 and us[2] == 1 and us[3] == 1, us
+print("OK : sacs invisibles (fondu de Daylight UI bloqué)")

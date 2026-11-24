@@ -175,10 +175,63 @@ function Marks.HookBagTools()
   return true
 end
 
+-- Garde-fou pour Daylight UI 2.2.5 : quand beaucoup d'objets bougent d'un coup (tri, gros butin),
+-- ses sacs fondent toute la grille à 0, déplacent les objets puis la refont apparaître. Si le
+-- déplacement plante, la grille reste à 0 : objets invisibles mais survolables. Ses fondus durent
+-- moins de 0,4 s ; une grille encore sous 1 et figée sur deux relevés à 0,5 s d'écart est donc
+-- bloquée, et on la remet à 1. On ne touche qu'à l'opacité de la fenêtre, jamais au code de Daylight.
+local function bagWindows()
+  local D = DaylightUI
+  local mod = type(D) == "table" and type(D.GetModule) == "function" and D:GetModule("Bags")
+  local mns = type(mod) == "table" and type(mod.ns) == "table" and mod.ns
+  return mns and (mns.windows or (mns.window and { mns.window })) or {}
+end
+
+function Marks.Unstick(first)
+  for _, w in ipairs(bagWindows()) do
+    local items = type(w) == "table" and w.items
+    if items and items.GetAlpha and w:IsVisible() then
+      local a = items:GetAlpha()
+      if first == nil then
+        if a < 0.99 then
+          C_Timer.After(0.5, function() ns.safe("sacs invisibles", Marks.Unstick, { [w] = a }) end)
+        end
+      elseif first[w] and a < 0.99 and math.abs(a - first[w]) < 0.01 then
+        items:SetAlpha(1)
+      end
+    end
+  end
+end
+
+local unstickDue = false
+local function unstickSoon()
+  if unstickDue then return end
+  unstickDue = true
+  C_Timer.After(1, function() unstickDue = false; ns.safe("sacs invisibles", Marks.Unstick) end)
+end
+Marks.UnstickSoon = unstickSoon
+
+-- Les fenêtres (sacs, banque) peuvent naître après la connexion : on accroche celles qu'on voit
+local showHooked = setmetatable({}, { __mode = "k" })
+local function hookShow()
+  for _, w in ipairs(bagWindows()) do
+    if type(w) == "table" and w.HookScript and not showHooked[w] then
+      showHooked[w] = true
+      w:HookScript("OnShow", unstickSoon)
+    end
+  end
+end
+Marks.HookShow = hookShow
+
+ns.on("BAG_UPDATE_DELAYED", function() ns.safe("sacs invisibles", hookShow); unstickSoon() end)
+
 ns.on("ADDON_LOADED", function(name)
   if name == "AHLedger" then ns.safe("bouton des sacs", Marks.HookBagTools) end
 end)
-ns.on("PLAYER_LOGIN", function() ns.safe("pastilles", Marks.Start); ns.safe("bouton des sacs", Marks.HookBagTools) end)
+ns.on("PLAYER_LOGIN", function()
+  ns.safe("pastilles", Marks.Start); ns.safe("bouton des sacs", Marks.HookBagTools)
+  ns.safe("sacs invisibles", hookShow)
+end)
 local function later() C_Timer.After(0, function() ns.safe("pastilles", Marks.Refresh, true) end) end
 ns.on("AUCTION_HOUSE_SHOW", later)
 ns.on("AUCTION_HOUSE_CLOSED", later)

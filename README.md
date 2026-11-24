@@ -46,6 +46,7 @@ Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l
 - DaylightUI_AuctionHouse remplace la fenêtre HV du jeu, qui reste ouverte mais invisible. AHLedger ajoute donc un onglet **AHLedger** à côté d'Acheter / Vendre / Mes enchères, dans la fenêtre HV de Daylight UI : pas besoin de repasser par la fenêtre du jeu. Daylight UI n'a pas d'appel public pour ajouter un onglet à son HV : AHLedger passe par `me.Wrap` / `me.Hook` sur les fonctions de son module, la voie que son API.md prévoit, mais sans garantie d'une version à l'autre.
 - Si une mise à jour de Daylight UI casse cet onglet, AHLedger affiche à la place un bouton **AHLedger** tant que l'HV est ouverte. Place-le avec `/dui unlock` (« AHLedger (HV) »).
 - `/ahl` ressort le contenu dans la fenêtre d'AHLedger ; il revient dans l'onglet au prochain clic dessus.
+- Sacs invisibles (Daylight UI 2.2.5) : après un tri ou un gros butin, ses sacs peuvent rester transparents (objets survolables mais pas affichés) quand leur fondu se bloque à 0. AHLedger le repère (opacité sous 1 et immobile une seconde après l'ouverture ou un changement des sacs) et remet l'opacité à 1 (`BagMarks.lua`, `Marks.Unstick`). Il ne touche qu'à l'opacité, pas au code de Daylight UI.
 - Un scan complet lancé depuis l'HV de Daylight UI est lu par AHLedger, comme ceux d'Auctionator.
 
 ## Conseils de Claude
