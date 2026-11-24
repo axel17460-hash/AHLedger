@@ -30,7 +30,7 @@ local EMPTY = {
   level = "Aucune recette connue : ouvre une fois la fenêtre de chacun de tes métiers.",
   bags = "Rien dans tes sacs pour l'instant : ouvre-les une fois (et ta banque) pour les relire.",
   ledger = "Aucun courrier d'HV relevé : passe à ta boîte aux lettres après tes ventes.",
-  track = "Aucun conseil noté pour l'instant : chaque scan note les flips et achats PNJ conseillés, et vérifie les anciens.",
+  track = "Aucun conseil noté pour l'instant : chaque scan note les flips, achats PNJ, artisanat et conseils des sacs, et vérifie les anciens.",
   vendor = "Aucun achat PNJ rentable. Les marchands que tu visites sont retenus automatiquement.",
   snipe = "Aucune enchère sous le prix de rachat PNJ dans le dernier scan.",
   farm = "Aucune session de farm : tape /ahl farm start avant de farmer, puis /ahl farm stop.",
@@ -219,7 +219,7 @@ local MODES = {
     tab = false, -- vue de l'onglet Bilan
     sort = "order",
     asc = true,
-    help = "Chaque conseil d'achat-revente est noté au scan où il apparaît, puis vérifié sur les scans suivants (3 j ; à stocker : jusqu'au rebond, 14 j au plus). Prix tenu = la revente annoncée était atteignable. Écoulé = le marché a acheté au moins ta quantité à ce prix (estimé : une annulation compte comme une vente). Réussi = les deux. Suivis = tu as acheté l'objet dans les 24 h (courriers d'HV) ; gain réel = tes reventes. /ahl fiabilite pour le détail.",
+    help = "Chaque conseil (flips, achat PNJ, artisanat à revendre, sacs « Vendre HV » et « PNJ ») est noté au scan où il apparaît, puis vérifié sur les scans suivants (3 j ; à stocker : jusqu'au rebond, 14 j au plus). Prix tenu = la revente annoncée était atteignable. Écoulé = le marché a acheté au moins ta quantité à ce prix (estimé ; les relistes repérés sont écartés). Réussi = les deux. Sacs « PNJ » : réussi si l'HV n'a pas clairement mieux payé ; sinon « Constaté » montre l'or manqué. Suivis = tu as acheté l'objet dans les 24 h (courriers d'HV) ; gain réel = tes reventes. /ahl fiabilite pour le détail.",
     cols = {
       { "Conseil", 175, function(e) return e.label end, "order" },
       { "Vérifiés", 50, function(e) return tostring(e.checked) end, "checked", "RIGHT" },

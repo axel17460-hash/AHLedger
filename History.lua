@@ -2,12 +2,13 @@
 --
 -- db.days[jour]  = { obs = secondes de marché observées (somme des écarts entre scans comparables),
 --                    scans = nombre de scans }
--- db.hist[id][jour] = "sommePrix,nbPrix,sommeStock,vendu,ambigu,valeurVendue,expiré"
+-- db.hist[id][jour] = "sommePrix,nbPrix,sommeStock,vendu,ambigu,valeurVendue,expiré,annulé"
 --   sommePrix/nbPrix : moyenne des prix médians affichés ce jour-là
 --   sommeStock       : à diviser par days[jour].scans (stock moyen à l'HV)
 --   vendu/ambigu     : unités disparues estimées vendues / incertaines
 --   valeurVendue     : cuivre total des enchères vendues (=> prix réel de vente)
 --   expiré           : unités disparues en fin de durée (=> taux d'écoulement) ; absent des anciennes données
+--   annulé           : unités retirées ou remises en vente (pas des ventes, cf. Scan.Diff) ; absent des anciennes données
 local _, ns = ...
 
 local History = {}
@@ -21,14 +22,14 @@ end
 
 function History.parse(s)
   if not s then return nil end
-  local a, b, c, d, e, f, g = s:match("^(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),?(%d*)$")
+  local a, b, c, d, e, f, g, k = s:match("^(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),?(%d*),?(%d*)$")
   if not a then return nil end
   return { pSum = tonumber(a), pN = tonumber(b), qSum = tonumber(c),
-           sold = tonumber(d), amb = tonumber(e), soldVal = tonumber(f), exp = tonumber(g) or 0 }
+           sold = tonumber(d), amb = tonumber(e), soldVal = tonumber(f), exp = tonumber(g) or 0, can = tonumber(k) or 0 }
 end
 
 local function pack(r)
-  return table.concat({ r.pSum, r.pN, r.qSum, r.sold, r.amb, r.soldVal, r.exp or 0 }, ",")
+  return table.concat({ r.pSum, r.pN, r.qSum, r.sold, r.amb, r.soldVal, r.exp or 0, r.can or 0 }, ",")
 end
 
 -- stats[id] = { med=, q= } pour les objets présents ; diff[id] = { sold, amb, soldVal, ... } ou nil
@@ -51,7 +52,7 @@ function History.Record(db, now, stats, diff, gap)
   for id in pairs(ids) do
     local h = db.hist[id]
     if not h then h = {}; db.hist[id] = h end
-    local r = History.parse(h[day]) or { pSum = 0, pN = 0, qSum = 0, sold = 0, amb = 0, soldVal = 0, exp = 0 }
+    local r = History.parse(h[day]) or { pSum = 0, pN = 0, qSum = 0, sold = 0, amb = 0, soldVal = 0, exp = 0, can = 0 }
     local s = stats[id]
     if s and s.med and s.med > 0 then
       r.pSum = r.pSum + s.med
@@ -64,6 +65,7 @@ function History.Record(db, now, stats, diff, gap)
       r.amb = r.amb + d.amb
       r.soldVal = r.soldVal + d.soldVal
       r.exp = (r.exp or 0) + (d.exp or 0)
+      r.can = (r.can or 0) + (d.can or 0)
     end
     h[day] = pack(r)
   end

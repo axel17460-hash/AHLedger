@@ -311,47 +311,83 @@ function Scan.Aggregate(rows)
   return items, sigs
 end
 
+local function parseSig(sig)
+  local id, count, buyout = sig:match("^(%d+):(%d+):(%d+):")
+  return tonumber(id), tonumber(count), tonumber(buyout)
+end
+
 -- Compare avec le scan précédent.
 -- Renvoie par objet : unités disparues classées en
---   sold  : avaient au moins 2 h restantes ET l'écart entre scans est plus court → vendues (ou annulées)
+--   sold  : avaient au moins 2 h restantes ET l'écart entre scans est plus court → vendues
+--   can   : parties de la même façon, mais ce sont presque sûrement des annulations ou des relistes
+--           (voir plus bas) → ne comptent pas comme ventes
 --   exp   : étaient en "court" → très probablement expirées
 --   amb   : cas ambigus
 -- et posted : nouvelles unités apparues.
+--
+-- Forever ne donne pas le nom des vendeurs : on ne peut pas voir qu'un vendeur annule et remet
+-- en vente. Un indice le trahit quand même : une pile est partie alors qu'une pile du même objet,
+-- moins chère et déjà là au scan précédent, est toujours en vente. Un acheteur prend le moins cher
+-- d'abord : la pile chère a été retirée (en général pour être remise en vente moins cher).
+-- Seulement pour les objets vendus en piles (marchandises) : pour un équipement, l'acheteur
+-- choisit ses statistiques, pas le prix.
+-- « Pile partie + pile de même taille moins chère apparue » n'est PAS retenu : une vente suivie
+-- d'une nouvelle mise en vente par quelqu'un d'autre donne exactement la même chose.
 function Scan.Diff(prevSigs, sigs, gap)
   local out = {}
   local function bucket(id)
     local b = out[id]
-    if not b then b = { sold = 0, exp = 0, amb = 0, posted = 0, soldVal = 0, lv = {} }; out[id] = b end
+    if not b then b = { sold = 0, can = 0, exp = 0, amb = 0, posted = 0, soldVal = 0, lv = {} }; out[id] = b end
     return b
   end
+
+  -- prix unitaire le plus bas des piles restées en place, et objets vendus en piles
+  local floor, stacked = {}, {}
   for sig, prev in pairs(prevSigs) do
+    local id, count, buyout = parseSig(sig)
+    if count > 1 then stacked[id] = true end
     local cur = sigs[sig]
-    local gone = prev.c - (cur and cur.c or 0)
-    if gone > 0 then
-      local id, count, buyout = sig:match("^(%d+):(%d+):(%d+):")
-      id, count, buyout = tonumber(id), tonumber(count), tonumber(buyout)
-      local units = gone * count
-      local b = bucket(id)
-      if prev.tl == 0 then
-        b.amb = b.amb + units -- temps restant inconnu
-      elseif prev.tl <= 1 then
-        b.exp = b.exp + units
-      elseif TL_MIN_SECONDS[prev.tl] and gap < TL_MIN_SECONDS[prev.tl] and buyout > 0 then
-        b.sold = b.sold + units
-        b.soldVal = b.soldVal + gone * buyout
-        b.lv[#b.lv + 1] = { buyout / count, units } -- prix unitaire des unités parties (fiabilité des conseils)
-      else
-        b.amb = b.amb + units
-      end
+    if cur and cur.c > 0 and buyout > 0 then
+      local u = buyout / count
+      if not floor[id] or u < floor[id] then floor[id] = u end
     end
   end
+
   for sig, cur in pairs(sigs) do
     local prev = prevSigs[sig]
     local added = cur.c - (prev and prev.c or 0)
     if added > 0 then
-      local id, count = sig:match("^(%d+):(%d+):")
-      local b = bucket(tonumber(id))
-      b.posted = b.posted + added * tonumber(count)
+      local id, count = parseSig(sig)
+      if count > 1 then stacked[id] = true end
+      local b = bucket(id)
+      b.posted = b.posted + added * count
+    end
+  end
+
+  for sig, prev in pairs(prevSigs) do
+    local cur = sigs[sig]
+    local gone = prev.c - (cur and cur.c or 0)
+    if gone > 0 then
+      local id, count, buyout = parseSig(sig)
+      local b = bucket(id)
+      if prev.tl == 0 then
+        b.amb = b.amb + gone * count -- temps restant inconnu
+      elseif prev.tl <= 1 then
+        b.exp = b.exp + gone * count
+      elseif TL_MIN_SECONDS[prev.tl] and gap < TL_MIN_SECONDS[prev.tl] and buyout > 0 then
+        local unit = buyout / count
+        -- une pile moins chère, déjà là avant, est restée : celle-ci a été retirée
+        local cancelled = (stacked[id] and floor[id] and unit > floor[id]) and gone or 0
+        b.can = b.can + cancelled * count
+        local sold = gone - cancelled
+        if sold > 0 then
+          b.sold = b.sold + sold * count
+          b.soldVal = b.soldVal + sold * buyout
+          b.lv[#b.lv + 1] = { unit, sold * count } -- prix unitaire des unités parties (fiabilité des conseils)
+        end
+      else
+        b.amb = b.amb + gone * count
+      end
     end
   end
   return out

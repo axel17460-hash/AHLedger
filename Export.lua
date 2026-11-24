@@ -64,10 +64,11 @@ function Export.Build()
 
   add("")
   add("## Marché : meilleurs scores (or/jour net × tendance × signaux)")
-  add("objet | prix | achat min | moy 7j | tend 7j | tend 24h | vendus/j | stockJ | écoul | vendeurs (top) | or/jour | signaux")
+  add("objet | prix | achat min | moy 7j | tend 7j | tend 24h | vendus/j | relistes/j | stockJ | écoul | vendeurs (top) | or/jour | signaux")
+  add("(relistes/j : enchères retirées ou remises en vente, écartées des ventes)")
   for _, s in ipairs(sorted(market, "score", Export.TOP.market)) do
-    add("%s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s", nameOf(s.id, s), g(s.price), g(s.minNow), g(s.avg7),
-      pct(s.trend), pct(s.trend24), num(s.perDay), num(s.stockDays, "%.1f"),
+    add("%s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s", nameOf(s.id, s), g(s.price), g(s.minNow), g(s.avg7),
+      pct(s.trend), pct(s.trend24), num(s.perDay), num(s.relistPerDay), num(s.stockDays, "%.1f"),
       s.sellThrough and ("%.0f%%"):format(s.sellThrough * 100) or "-",
       s.sellers and ("%d (%.0f%%)"):format(s.sellers, (s.topShare or 0) * 100) or "-", g(s.gpd), table.concat(s.signals, ", "))
   end

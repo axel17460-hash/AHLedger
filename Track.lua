@@ -1,10 +1,15 @@
--- AHLedger - Fiabilité des conseils : chaque conseil d'achat-revente (Flip HV, Achat PNJ) est noté au
--- scan où il apparaît, puis vérifié sur les scans suivants, pendant son délai :
+-- AHLedger - Fiabilité des conseils : chaque conseil (Flip HV, Achat PNJ, artisanat à revendre à l'HV,
+-- conseils des sacs « Vendre HV » et « PNJ ») est noté au scan où il apparaît, puis vérifié sur les
+-- scans suivants, pendant son délai :
 --   * prix tenu : le prix auquel tu aurais pu revendre (enchère la moins chère restante, hors unités
 --     que le conseil t'aurait fait acheter) atteint-il le prix de revente annoncé ?
 --   * écoulé : le marché a-t-il acheté au moins ta quantité à ce prix ou plus (enchères disparues
---     entre deux scans, donc estimé : une annulation compte comme une vente) ?
+--     entre deux scans, donc estimé ; les relistes repérés par Scan.Diff sont écartés) ?
 --   Réussi = prix tenu ET écoulé. Bénéfice constaté = quantité × net du prix tenu − coût.
+--   Artisanat : coût = composants ; sacs « Vendre HV » : coût = ce que le marchand t'aurait payé.
+--   Sacs « PNJ » : le conseil est faux si l'HV aurait clairement payé plus (prix tenu et écoulé au-dessus
+--   du rachat PNJ + Bags.SAME_BAND) ; « bénéfice constaté » = or manqué (négatif) dans ce cas.
+--   Pas suivis : « Garder », « Attendre » et « Fabriquer » (pas de prix de revente à vérifier).
 -- Et si tu l'as suivi (achat de l'objet dans les 24 h, d'après tes courriers d'HV) : gain réel de
 -- tes reventes, achat par achat (premier acheté, premier vendu).
 local _, ns = ...
@@ -13,7 +18,8 @@ local Track = {}
 ns.Track = Track
 
 Track.FOLLOW_SECS = 86400     -- un achat dans les 24 h qui suivent le conseil = conseil suivi
-Track.HORIZON = { now = 3, vendor = 3, stock = 14 } -- jours de vérification (à stocker : selon les rebonds connus)
+Track.HORIZON = { now = 3, vendor = 3, stock = 14, craft = 3, bag = 3 } -- jours de vérification (à stocker : selon les rebonds connus)
+Track.MAX_QTY = 20            -- artisanat et sacs : on vérifie au plus 20 unités (une pile)
 Track.HELD = 0.97             -- prix tenu : revente constatée à 3 % près du prix annoncé
 Track.SOLD_AT = 0.95          -- écoulé : unités parties à au moins 95 % du prix de revente
 Track.KEEP_DAYS = 90
@@ -24,6 +30,9 @@ Track.GROUPS = {
   { key = "stockTest", label = "Flip HV à stocker (à tester)" },
   { key = "vendor", label = "Achat PNJ → HV" },
   { key = "vendorTest", label = "Achat PNJ → HV (à tester)" },
+  { key = "craft", label = "Artisanat → HV" },
+  { key = "bagAH", label = "Sacs : vendre à l'HV" },
+  { key = "bagNPC", label = "Sacs : vendre au PNJ" },
 }
 
 function Track.DB(db)
@@ -51,7 +60,8 @@ end
 -- nil = plus rien en vente.
 function Track.Achievable(rec, book)
   if not (book and book.levels) then return nil end
-  local skip = rec.k ~= "vendor" and rec.qty or 0
+  -- flips : tu achètes d'abord les unités conseillées, ta revente se place derrière
+  local skip = (rec.k == "now" or rec.k == "stock") and rec.qty or 0
   for _, l in ipairs(book.levels) do
     if skip > 0 and l[1] <= rec.buy then
       local s = math.min(skip, l[2])
@@ -82,6 +92,30 @@ local function fromVendor(e, now)
            resale = e.s.price, expect = qty * e.margin, n = 0, held = {}, sold = 0 }
 end
 
+-- Artisanat rentable à revendre à l'HV : quantité vendable en un jour, au prix du marché
+local function fromCraft(e, now)
+  local made = e.made or 1
+  local qty = math.min(Track.MAX_QTY, math.max(made, math.ceil((e.vol or 0) * made)))
+  return { id = e.id, k = "craft", g = "craft", t = now, till = now + Track.HORIZON.craft * 86400, qty = qty,
+           cost = qty / made * e.cost, resale = e.s.price, expect = qty / made * e.profit, n = 0, held = {}, sold = 0 }
+end
+
+-- Conseil des sacs : « Vendre HV » au prix conseillé, ou « PNJ » (l'HV ne vaut pas la peine)
+local function fromBag(e, now)
+  local cut = ns.Analysis.AH_CUT
+  local till = now + Track.HORIZON.bag * 86400
+  if e.action == "Vendre HV" then
+    local qty = math.min(Track.MAX_QTY, e.postQty or e.count or 1)
+    return { id = e.id, k = "bagAH", g = "bagAH", t = now, till = till, qty = qty, cost = qty * (e.vendor or 0),
+             resale = e.post, expect = qty * (e.unit - (e.vendor or 0)), n = 0, held = {}, sold = 0 }
+  end
+  -- PNJ : prix HV (brut) à partir duquel l'HV aurait clairement mieux payé
+  local qty = math.min(Track.MAX_QTY, e.count or 1)
+  local band = ns.Bags and ns.Bags.SAME_BAND or 0.10
+  return { id = e.id, k = "bagNPC", g = "bagNPC", t = now, till = till, qty = qty, cost = qty * e.vendor,
+           vendor = e.vendor, resale = e.vendor * (1 + band) / (1 - cut), expect = 0, n = 0, held = {}, sold = 0 }
+end
+
 -- Clôture : prix tenu, écoulé, bénéfice constaté
 function Track.Close(rec)
   local r
@@ -97,6 +131,13 @@ function Track.Close(rec)
   rec.soldOk = rec.sold >= rec.qty
   rec.ok = rec.priceOk and rec.soldOk
   rec.gain = rec.qty * net(rec.realized) - rec.cost
+  if rec.k == "bagNPC" then
+    -- conseil juste tant que l'HV n'a PAS clairement fait mieux que le marchand
+    local better = rec.ok
+    rec.ok, rec.priceOk = not better, not rec.priceOk
+    rec.realized = r -- pas plafonné : on veut l'or réellement manqué
+    rec.gain = better and math.min(0, rec.cost - rec.qty * net(r)) or 0
+  end
   rec.status = rec.ok and "ok" or "ko"
   return rec
 end
@@ -111,8 +152,10 @@ function Track.OnScan(db, now, diff)
       local p = Track.Achievable(rec, book)
       if p then
         rec.n = rec.n + 1
-        rec.held[#rec.held + 1] = math.min(p - 1, rec.resale) -- tu te mets juste en dessous
-        rec.last = math.min(p - 1, rec.resale)
+        -- tu te mets juste en dessous ; sacs « PNJ » : pas de plafond, on veut l'or que l'HV aurait payé
+        local cap = rec.k == "bagNPC" and math.huge or rec.resale
+        rec.held[#rec.held + 1] = math.min(p - 1, cap)
+        rec.last = math.min(p - 1, cap)
         if p - 1 >= rec.resale * Track.HELD then rec.reached = true end
       end
       local d = diff and diff[rec.id]
@@ -136,6 +179,20 @@ function Track.OnScan(db, now, diff)
   for _, e in ipairs(ns.Analysis.VendorFlips()) do
     local key = e.id .. ":vendor"
     if not t.open[key] then t.open[key] = fromVendor(e, now) end
+  end
+  for _, e in ipairs(ns.Analysis.Crafts()) do
+    if e.cost and e.sellTo == "HV" and (e.profit or 0) > 0 and e.s and e.s.price then
+      local key = e.id .. ":craft"
+      if not t.open[key] then t.open[key] = fromCraft(e, now) end
+    end
+  end
+  for _, e in ipairs(ns.Bags and ns.Bags.Advice() or {}) do
+    local ok = (e.action == "Vendre HV" and e.post and e.post > 0)
+      or (e.action == "PNJ" and e.s and (e.vendor or 0) > 0)
+    if ok then
+      local key = e.id .. ":" .. (e.action == "PNJ" and "bagNPC" or "bagAH")
+      if not t.open[key] then t.open[key] = fromBag(e, now) end
+    end
   end
   -- 3) purge
   local keep = {}

@@ -119,6 +119,7 @@ local function build(id)
     kv("Tendance 7 j" .. (s.trendSrc and " (Auctionator)" or ""), trendText(s.trend, " /j"))
     -- Volume et concurrence
     if s.perDay then kv("Vendus /jour (estim.)", ("%.0f  (stock moyen %.0f)"):format(s.perDay, s.stock or 0)) end
+    if s.relistPerDay and s.relistPerDay >= 1 then kv("Relistes écartés /jour", ("%.0f"):format(s.relistPerDay)) end
     local parts = {}
     if s.sellThrough then parts[#parts + 1] = ("%.0f%% vendues"):format(s.sellThrough * 100) end
     if s.stockDays then parts[#parts + 1] = ("%.1f j de stock"):format(s.stockDays) end

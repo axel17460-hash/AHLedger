@@ -29,7 +29,7 @@ from datetime import datetime
 from pathlib import Path
 
 DB_PATH = Path(__file__).with_name("ahledger.sqlite")
-AH_CUT = 0.05  # commission de l'HV (5 % en Classic, à vérifier sur Forever)
+AH_CUT = 0.05  # commission de l'HV (5 %, mesuré sur Forever le 23/11/2026)
 
 
 # --------------------------------------------------------------------------

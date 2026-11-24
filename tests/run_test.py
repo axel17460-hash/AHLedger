@@ -1016,3 +1016,95 @@ assert tr[5] == "ok" and tr[6] == "ko" and tr[7] < 4000, tr
 assert tr[8] == "ok" and tr[9] == 1, tr                   # à stocker : remonté et écoulé, clos tôt
 assert tr[10] == 520, tr                                  # 10 unités achetées : 4 à 500, 6 à 520 → reste 520
 print("OK : fiabilité des conseils")
+
+# --- Relistes et annulations : pas des ventes (Scan.Diff) ---
+rl = lua.eval("""function(ns)
+  local S, H = ns.Scan, ns.History
+  local function sig(id, count, buyout, tl) return id .. ":" .. count .. ":" .. buyout .. ":?", tl end
+  local function set(list)
+    local t = {}
+    for _, e in ipairs(list) do
+      local k = e[1] .. ":" .. e[2] .. ":" .. e[3] .. ":?"
+      local s = t[k]
+      if s then s.c = s.c + 1 else t[k] = { c = 1, tl = e[4] or 4 } end
+    end
+    return t
+  end
+  -- Tissu (piles de 20) : 2 piles à 10 c/u, 1 à 12 c/u, 1 à 15 c/u.
+  -- Une pile à 10 part (achetée), celle à 15 part alors qu'une pile à 10 reste : annulée.
+  local prev = set({ { 1, 20, 200 }, { 1, 20, 200 }, { 1, 20, 240 }, { 1, 20, 300 } })
+  local cur  = set({ { 1, 20, 200 }, { 1, 20, 240 }, { 1, 20, 190 } })   -- 190 = remise en vente
+  local d = S.Diff(prev, cur, 3600)[1]
+  -- Équipement (pièces uniques) : la pièce chère part alors qu'une moins chère reste.
+  -- L'acheteur choisit ses statistiques : c'est une vente.
+  local gp = set({ { 2, 1, 5000 }, { 2, 1, 9000 } })
+  local gc = set({ { 2, 1, 5000 } })
+  local g = S.Diff(gp, gc, 3600)[2]
+  -- Tout le bas du marché acheté d'un coup : rien d'annulé
+  local bp = set({ { 3, 20, 200 }, { 3, 20, 220 }, { 3, 20, 400 } })
+  local bc = set({ { 3, 20, 400 } })
+  local b = S.Diff(bp, bc, 3600)[3]
+  -- Historique : les anciens formats (6 et 7 champs) se lisent encore, le nouveau garde « annulé »
+  local h6, h7 = H.parse("1,2,3,4,5,6"), H.parse("1,2,3,4,5,6,7")
+  local h8 = H.parse("1,2,3,4,5,6,7,8")
+  return d.sold, d.can, d.soldVal, #d.lv, d.posted, g.sold, g.can, b.sold, b.can,
+         h6.can, h7.exp, h7.can, h8.exp, h8.can
+end""")(ns)
+print("Relistes :", rl)
+assert rl[0] == 20 and rl[1] == 20 and rl[2] == 200 and rl[3] == 1 and rl[4] == 20, rl
+assert rl[5] == 1 and rl[6] == 0, rl          # équipement : vendu, pas annulé
+assert rl[7] == 40 and rl[8] == 0, rl         # bas du marché acheté : vendu
+assert rl[9] == 0 and rl[10] == 7 and rl[11] == 0 and rl[12] == 7 and rl[13] == 8, rl
+print("OK : relistes et annulations écartées des ventes")
+
+# --- Fiabilité : artisanat et conseils des sacs ---
+tc = lua.eval("""function(ns)
+  local T, A, B = ns.Track, ns.Analysis, ns.Bags
+  local db = { book = {} }
+  local saved = { A.Flips, A.VendorFlips, A.Crafts, B.Advice }
+  A.Flips = function() return {} end
+  A.VendorFlips = function() return {} end
+  -- 11 : potion rentable (coût 600 par fabrication, revente 1000) ; 12 : potion qui s'effondre
+  local crafts = {
+    { id = 11, made = 1, cost = 600, profit = 350, sellTo = "HV", vol = 4, s = { price = 1000 } },
+    { id = 12, made = 1, cost = 600, profit = 350, sellTo = "HV", vol = 4, s = { price = 1000 } },
+    { id = 13, made = 1, cost = 600, profit = -50, sellTo = "HV", vol = 4, s = { price = 600 } }, -- pas rentable : ignorée
+  }
+  -- 21 : à vendre à l'HV à 800 (PNJ 100) ; 22 : PNJ conseillé à 300, l'HV part à 900 ; 23 : PNJ à 300, l'HV reste à 280
+  local bags = {
+    { id = 21, action = "Vendre HV", post = 800, unit = 760, postQty = 5, count = 5, vendor = 100 },
+    { id = 22, action = "PNJ", unit = 300, count = 10, vendor = 300, s = {} },
+    { id = 23, action = "PNJ", unit = 300, count = 10, vendor = 300, s = {} },
+    { id = 24, action = "Garder", unit = 500, count = 3, vendor = 50, s = {} },                  -- pas suivi
+  }
+  A.Crafts = function() return crafts end
+  B.Advice = function() return bags end
+  local t0 = 3000000
+  local function book(id, str) db.book[id] = str end
+  T.OnScan(db, t0, nil)
+  crafts, bags = {}, {}
+  local function sold(price, units) return { lv = { { price, units } } } end
+  for d = 1, 3 do
+    book(11, "0,0|1000:30"); book(12, "0,0|500:40")
+    book(21, "0,0|820:20"); book(22, "0,0|900:20"); book(23, "0,0|280:50")
+    T.OnScan(db, t0 + d * 86400, { [11] = sold(1000, 5), [12] = sold(500, 10), [21] = sold(820, 1),
+                                   [22] = sold(900, 10), [23] = sold(280, 20) })
+  end
+  A.Flips, A.VendorFlips, A.Crafts, B.Advice = saved[1], saved[2], saved[3], saved[4]
+  local done = {}
+  for _, r in ipairs(db.track.done) do done[r.id] = r end
+  local by = {}
+  for _, s in ipairs(T.Summary(db)) do by[s.key] = s end
+  return done[11].status, done[11].qty, done[12].status, done[13] == nil, done[21].status, done[21].gain,
+         done[22].status, done[22].gain, done[23].status, done[23].gain, done[24] == nil,
+         by.craft.checked, by.bagAH.ok, by.bagNPC.checked, by.bagNPC.ok, A.AH_CUT
+end""")(ns)
+print("Fiabilité artisanat et sacs :", tc)
+assert tc[0] == "ok" and tc[1] == 4 and tc[2] == "ko" and tc[3], tc   # 4 = vol 4/j × 1 jour
+cut = tc[15]
+assert tc[4] == "ko", tc                                               # 3 écoulés sur 5 : pas écoulé
+assert abs(tc[5] - (5 * 800 * (1 - cut) - 500)) < 1e-6, tc             # gain vs PNJ : 5 × net(800) − 5 × 100
+assert tc[6] == "ko" and abs(tc[7] - (10 * 300 - 10 * 899 * (1 - cut))) < 1e-6, tc  # PNJ à tort : or manqué
+assert tc[8] == "ok" and tc[9] == 0 and tc[10], tc                     # PNJ juste ; « Garder » pas suivi
+assert tc[11] == 2 and tc[12] == 0 and tc[13] == 2 and tc[14] == 1, tc
+print("OK : fiabilité de l'artisanat et des conseils des sacs")

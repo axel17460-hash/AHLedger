@@ -4,10 +4,12 @@ local _, ns = ...
 local Analysis = {}
 ns.Analysis = Analysis
 
-Analysis.AH_CUT = 0.05          -- commission HV (Classic : 5 %, à vérifier sur Forever)
+Analysis.AH_CUT = 0.05          -- commission HV : 5 % (mesuré sur Forever le 23/11/2026) ; remplacée par la mesure de Ledger.Calibrate
 Analysis.TREND_DAYS = 7         -- fenêtre de la régression de prix
 Analysis.MIN_SOLD_FOR_REAL = 5  -- unités vendues mini pour faire confiance au prix réel de vente
-Analysis.DEPOSIT_RATE = 0.15    -- dépôt d'une mise en vente de 12 h, en part du prix PNJ (à vérifier sur Forever)
+Analysis.DEPOSIT_RATE = 0.15    -- dépôt par mise en vente, en part du prix PNJ : valeur par défaut, remplacée par la mesure
+                                -- de Ledger.Calibrate dès 5 ventes (Forever : ~43 % mesuré sur 18 ventes le 24/11/2026,
+                                -- selon la durée de mise en vente choisie)
 Analysis.HEAVY_STOCK_DAYS = 7   -- au-delà de 7 jours de ventes déjà en rayon, le marché est saturé
 -- Flip HV : acheter les enchères trop basses et les remettre au prix du marché
 Analysis.FLIP_HOLD_DAYS = 2     -- on n'achète pas plus que ce qui se revend en 2 jours
@@ -91,7 +93,7 @@ function Analysis.ItemStats(db, id, today)
   today = today or History.today()
 
   local pts = {}
-  local w = { sold = 0, amb = 0, val = 0, obs = 0, exp = 0 }   -- 7 derniers jours
+  local w = { sold = 0, amb = 0, val = 0, obs = 0, exp = 0, can = 0 }   -- 7 derniers jours
   local recent = { sold = 0, obs = 0, q = 0, qn = 0 }          -- 0-2 jours
   local prior = { sold = 0, obs = 0, q = 0, qn = 0 }           -- 3-9 jours
   local priceNow, priceDay, days = nil, nil, 0
@@ -114,6 +116,7 @@ function Analysis.ItemStats(db, id, today)
         w.amb = w.amb + (r and r.amb or 0)
         w.val = w.val + (r and r.soldVal or 0)
         w.exp = w.exp + (r and r.exp or 0)
+        w.can = w.can + (r and r.can or 0)
         w.obs = w.obs + dr.obs
       end
       local b = (age < 3 and recent) or (age < 10 and prior) or nil
@@ -137,6 +140,8 @@ function Analysis.ItemStats(db, id, today)
   end
   s.price = s.realPrice or priceNow
   s.perDay = w.obs > 0 and (w.sold + 0.5 * w.amb) / w.obs * 86400 or nil
+  -- annulations et relistes écartées des ventes (Scan.Diff), pour le rapport et l'infobulle
+  s.relistPerDay = w.obs > 0 and w.can > 0 and w.can / w.obs * 86400 or nil
   s.stock = recent.qn > 0 and recent.q / recent.qn or nil
 
   local b = robustSlope(pts, 2)
@@ -463,7 +468,7 @@ function Analysis.Crafts()
       local made = r.m or 1
       local value = s and math.max(s.netExp, 0) * made
       local vsell = (AHLedgerDB.items[outId] and AHLedgerDB.items[outId].s or 0) * made
-      local e = { id = outId, s = s, prof = prof, name = r.n, cost = missing == 0 and cost or nil, missing = missing,
+      local e = { id = outId, s = s, prof = prof, name = r.n, made = made, cost = missing == 0 and cost or nil, missing = missing,
                   value = value, vendorValue = vsell, perDay = s and s.perDay, diff = r.d }
       if e.cost then
         local best = math.max(value or 0, vsell)
