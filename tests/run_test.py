@@ -606,7 +606,7 @@ GameTooltip.scripts.OnTooltipSetItem(GameTooltip)
 """)
 tt = [strip(re.sub(r"\|T[^|]*\|t", "", x)) for x in lua.eval("TT").values()]
 print("\n".join(tt))
-assert any(x.startswith("Tu en as 30 (sacs 30, banque 0) : Vendre HV") for x in tt), tt
+assert any(x.startswith("Tes 30 : Vendre HV") for x in tt), tt
 assert any(x.startswith("Toi, 30 j = 120 vendus") for x in tt), tt
 assert any(x.startswith("Données : ") for x in tt), tt
 print("OK : tests PNJ → HV et tooltip")
@@ -877,7 +877,7 @@ print("Infobulle courte :\n" + compact)
 cl = compact.split("\n")
 assert cl[0] == "AHLedger = Maj : détails" and len(cl) <= 3, cl
 assert any(x.startswith("HV /u = ") for x in cl) and not any(x.startswith("Données") for x in cl), cl
-assert "Données : " in shift and "Tu en as 30" in shift, shift
+assert "Données : " in shift and "Tes 30 : " in shift, shift
 assert "Données : " in atAH and "Données : " not in ahCompact and "HV /u = " in ahCompact, ahCompact
 assert off == "", off
 assert modes[5] is None and modes[6] is not None and modes[7], modes
@@ -1409,3 +1409,33 @@ print("Se vend :", sv)
 assert sv[:8] == ["yes", "slow", "no", "unknown", "yes", "no", "slow", "unknown"], sv
 assert "relistes" in sv[8], sv
 print("OK : verdict « se vend » sur ventes sûres, courriers d'abord")
+
+# Infobulle : pas de doublon avec ce que le jeu / Auctionator / Daylight Bags affichent déjà
+dup = lua.eval("""function(ns)
+  local function tip(short)
+    advance(10)
+    TT = {}
+    IsShiftKeyDown = function() return not short end
+    GameTooltip.GetItem = function() return 'Mageweave', '|Hitem:4338::::|h' end
+    GameTooltip.scripts.OnTooltipSetItem(GameTooltip)
+    IsShiftKeyDown = nil
+    return table.concat(TT, "\\n")
+  end
+  local plain = tip()
+  Auctionator.Config = { Options = { AUCTION_TOOLTIPS = "auction_tooltips" }, Get = function() return true end }
+  ns.dataVersion = (ns.dataVersion or 0) + 1
+  local withAuct = tip()
+  local short = tip(true)
+  Auctionator.Config = nil
+  ns.dataVersion = (ns.dataVersion or 0) + 1
+  return plain, withAuct, short
+end""")(ns)
+plain, withAuct, short = (strip(re.sub(r"\|T[^|]*\|t", "", m)) for m in dup)
+print("Courte avec Auctionator :", short)
+assert "HV réel /u = 9s 68c" in short and "HV /u = " not in short, short
+print("Prix sans Auctionator :", [l for l in plain.split("\n") if l.startswith("Prix /u")])
+print("Prix avec Auctionator :", [l for l in withAuct.split("\n") if l.startswith("Prix /u")])
+assert "PNJ rachète" not in plain and "sacs 30" not in plain and "banque 0" not in plain, plain
+pl = [l for l in withAuct.split("\n") if l.startswith("Prix /u")][0]
+assert pl.startswith("Prix /u = le - cher ") or pl.startswith("Prix /u = réel "), pl
+print("OK : infobulle sans doublons (PNJ, stock, prix Auctionator)")

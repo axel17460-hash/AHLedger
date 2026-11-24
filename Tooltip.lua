@@ -79,12 +79,23 @@ local GRAYT = "|cff999999"
 local function join(t, sep) return table.concat(t, sep or " · ") end
 local function signed(v) return (v >= 0 and "+" or "-") .. ns.money(math.abs(v)) end
 
+-- Ce que le jeu et les autres addons écrivent déjà dans l'infobulle d'un objet de tes sacs :
+-- prix PNJ (ligne du jeu, et « Vendor » d'Auctionator), nombre possédé (case du sac, comptes
+-- de Daylight Bags), prix HV le plus bas (« Auction » d'Auctionator, si activé). On ne le répète pas.
+local function auctionatorShowsAuction()
+  local C = Auctionator and Auctionator.Config
+  if not (C and C.Get and C.Options and C.Options.AUCTION_TOOLTIPS) then return false end
+  local ok, v = pcall(C.Get, C.Options.AUCTION_TOOLTIPS)
+  return ok and v == true
+end
+ns.Tooltip = ns.Tooltip or {}
+ns.Tooltip.AuctionatorShowsAuction = auctionatorShowsAuction
+
 -- Infobulle complète, regroupée : l'action d'abord, puis une ligne par thème
 -- (prix, repères, tendance, marché, opportunités, métiers, toi), la qualité des données en pied.
 local function build(id)
   local db = ns.realmDB()
   local s = ns.Analysis.Get(id)
-  local meta = AHLedgerDB.items[id]
   local vendor = db.vendor and db.vendor[id]
   local L = {}
   local function kv(a, b) L[#L + 1] = { a, b } end
@@ -104,8 +115,10 @@ local function build(id)
   -- 2. Prix /u : le moins cher maintenant, ce qui part vraiment, ce qui te reste
   if s then
     local p = {}
-    if s.minNow then
+    if s.minNow and not auctionatorShowsAuction() then
       p[#p + 1] = ns.money(s.minNow) .. (s.vsAvg and (" (%s vs moy.)"):format(ns.pct(s.vsAvg)) or "")
+    elseif s.vsAvg then
+      p[#p + 1] = "le - cher " .. ns.pct(s.vsAvg) .. " vs moy."
     end
     p[#p + 1] = "réel " .. (s.realPrice and ns.money(s.realPrice) or "|cff808080?|r")
     local net = "net " .. ns.money(s.netExp)
@@ -115,14 +128,13 @@ local function build(id)
     if s.spike then
       kv("Pic de prix", ("habituel %s · |cffff8040vends ce que tu as, n'investis pas|r"):format(ns.money(s.usual)))
     end
-    -- Repères : moyenne, plus haut vendu, PNJ
+    -- Repères : moyenne, plus haut vendu (le rachat PNJ est déjà sur la ligne « Vendor » du jeu)
     local r = {}
     if s.avg7 then r[#r + 1] = "moy. 7 j " .. ns.money(s.avg7) end
     if s.ev and s.ev.maxSold then
       r[#r + 1] = "haut vendu " .. ns.money(s.ev.maxSold)
         .. (s.capped and (" |cffff8040(affiché %s)|r"):format(ns.money(s.listedPrice)) or "")
     end
-    if meta and meta.s and meta.s > 0 then r[#r + 1] = "PNJ rachète " .. ns.money(meta.s) end
     if #r > 0 then kv("Repères /u", join(r)) end
   else
     line("Pas de marché HV observé récemment", 0.6, 0.6, 0.6)
@@ -239,17 +251,13 @@ local function build(id)
       line("Tu peux le dépecer", 0.6, 0.9, 1)
     end
 
-    -- 7. Toi : ton stock et ton conseil
+    -- 7. Toi : le conseil pour ton stock (le détail sacs / banque est déjà dans la case et chez Daylight Bags)
     local c = ns.Prof.Char()
-    local nb, nk = (c.bags or {})[id] or 0, (c.bank or {})[id] or 0
-    if nb + nk > 0 then
-      local a = ns.Bags.Advise(id, nb + nk)
-      local adv = ""
-      if a then
-        adv = " : " .. a.action .. (a.post and (" à %s/u, %d à la fois"):format(ns.money(a.post), a.postQty or 1) or "")
-          .. (" (%s)"):format(ns.money(a.value))
-      end
-      line(("Tu en as %d (sacs %d, banque %d)%s"):format(nb + nk, nb, nk, adv), 1, 0.82, 0)
+    local n = ((c.bags or {})[id] or 0) + ((c.bank or {})[id] or 0)
+    local a = n > 0 and ns.Bags.Advise(id, n)
+    if a then
+      line(("Tes %d : %s%s (%s)"):format(n, a.action,
+        a.post and (" à %s/u, %d à la fois"):format(ns.money(a.post), a.postQty or 1) or "", ns.money(a.value)), 1, 0.82, 0)
     end
   end
 
@@ -299,11 +307,13 @@ local function buildCompact(id)
   if up then L[#L + 1] = { up, r = 1, g = 0.6, b = 0 } end
   local s = ns.Analysis.Get(id)
   local sells = ns.Analysis.Sells(s, ns.Analysis.RealSales()[id])
-  local price = s and (s.minNow or s.realPrice or s.avg7)
-  if price then
-    local t = s.trend24 or s.trend
-    L[#L + 1] = { "HV /u", ns.money(price) .. (t and ("  " .. trendText(t, " /j")) or "")
-                  .. "  · " .. ns.Analysis.SELLS_LABEL[sells] }
+  -- Auctionator affiche déjà le moins cher : on donne alors le prix réel de vente, ou rien
+  local dup = auctionatorShowsAuction()
+  local price = s and (dup and s.realPrice or not dup and (s.minNow or s.realPrice or s.avg7))
+  local t = s and (s.trend24 or s.trend)
+  if price or (dup and t) then
+    L[#L + 1] = { dup and "HV réel /u" or "HV /u", (price and ns.money(price) or "")
+                  .. (t and ("  " .. trendText(t, " /j")) or "") .. "  · " .. ns.Analysis.SELLS_LABEL[sells] }
   elseif sells ~= "unknown" then
     L[#L + 1] = { "Se vend à l'HV ?", ns.Analysis.SELLS_LABEL[sells] }
   end
