@@ -109,6 +109,9 @@ local function build(id)
     end
     if s.trust then kv("Fiabilité du prix", ns.Trust.LABEL[s.trust] .. " · " .. (s.trustWhy or "")) end
     kv("Net /u (commission, dépôts)", ns.money(s.netExp))
+    if s.spike then
+      kv("Pic de prix", ("habituel %s · |cffff8040vends ce que tu as, n'investis pas|r"):format(ns.money(s.usual)))
+    end
     if meta and meta.s and meta.s > 0 then kv("Rachat par le PNJ /u", ns.money(meta.s)) end
   else
     line("Pas de marché HV observé récemment", 0.6, 0.6, 0.6)

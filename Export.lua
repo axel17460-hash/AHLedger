@@ -117,6 +117,10 @@ function Export.Build()
     add("%s (%s, %s) : coût %s, valeur %s (%s), bénéfice %s, %s vendus/j, ~%s fabrications/j → %s/j", nameOf(e.id, e.s),
       ns.Prof.LABEL[e.prof] or e.prof, e.diff or "?", g(e.cost), g(math.max(e.value or 0, e.vendorValue)), e.sellTo or "-",
       g(e.profit), num(e.perDay), num(e.vol), g(e.daily))
+    if e.spike then
+      add("  pic de prix : %s/u aujourd'hui contre %s d'habitude, valeur comptée au prix habituel",
+        g(e.s.price), g(e.s.usual))
+    end
   end
 
   add("")

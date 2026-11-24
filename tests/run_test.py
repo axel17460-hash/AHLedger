@@ -1199,3 +1199,40 @@ assert tr[6] == "bad" and "au-dessus" in tr[7], tr
 assert tr[8] == "bad" and "expiré chez toi ×2" in tr[9] and tr[10] == "PNJ", tr
 assert tr[12] == "Vendre HV" and tr[13] <= 717, tr
 print("OK : fiabilité d'un prix (prix affiché non tenu, expiré chez toi)")
+
+# Pic de prix (cas réel des Pilferer's Gloves, 24/11/2026) : ~50 pa d'habitude, 1 po 66 aujourd'hui avec
+# 9 « ventes » à 1 po 66. Vendre ce qu'on a : prix du jour. Fabriquer / acheter : prix habituel.
+pk = lua.eval("""function(ns)
+  local db, A = ns.realmDB(), ns.Analysis
+  local day = ns.History.today()
+  local id = 7358
+  AHLedgerDB.items[id] = { n = "Pilferer's Gloves", s = 885, q = 2, c = 4 }
+  local h = { [day] = "99590,6,106,9,2,149400,0" }
+  for k = 1, 4 do h[day - k] = "10000,2,17,1,0,5000"; db.days[day - k] = db.days[day - k] or { obs = 6 * 3600, scans = 2 } end
+  db.hist[id] = h
+  ns.dataVersion = ns.dataVersion + 1
+  local s = A.Get(id)
+  local r = { s.spike, s.usual, s.netExp, A.SafeNet(s), table.concat(s.signals, ","), s.price }
+  -- le pic tient depuis 5 jours : c'est le nouveau prix
+  for k = 1, 4 do h[day - k] = "33200,2,17,1,0,16600" end
+  for k = 5, 8 do h[day - k] = "10000,2,17,1,0,5000"; db.days[day - k] = db.days[day - k] or { obs = 6 * 3600, scans = 2 } end
+  ns.dataVersion = ns.dataVersion + 1
+  local s2 = A.Get(id)
+  local settled = { s2.spike, A.SafeNet(s2) }
+  -- AHLedger n'a qu'un jour d'avant : l'historique Auctionator complète
+  db.hist[id] = { [day] = "99590,6,106,9,2,149400,0", [day - 1] = "14000,2,17,0,7,0" }
+  local saved = ns.Bridge.History
+  ns.Bridge.History = function() return { { -6, 4500 }, { -4, 5000 }, { -3, 5200 }, { -1, 9900 }, { 0, 16600 } } end
+  ns.dataVersion = ns.dataVersion + 1
+  local s3 = A.Get(id)
+  local ah = { s3.spike, s3.usual }
+  ns.Bridge.History = saved
+  db.hist[id] = nil
+  ns.dataVersion = ns.dataVersion + 1
+  return r[1], r[2], r[3], r[4], r[5], r[6], settled[1], settled[2], ah[1], ah[2]
+end""")(ns)
+print("Pic de prix (Pilferer's Gloves) :", list(pk))
+assert pk[0] is True and abs(pk[1] - 5000) < 1 and pk[2] > 12000 and pk[3] < 5000 and "pic" in pk[4], pk
+assert pk[6] is None and pk[7] > 13000, pk            # 5 jours au-dessus : plus un pic
+assert pk[8] is True and abs(pk[9] - 5100) < 1, pk    # médiane de 4500, 5000, 5200 et 7000 (la veille, AHLedger d'abord)
+print("OK : pic de prix (valeur d'investissement au prix habituel)")

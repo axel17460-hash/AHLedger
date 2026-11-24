@@ -21,6 +21,10 @@ Analysis.FLIP_STORE_GAP = 0.10      -- le prix habituel doit dépasser d'au moin
 Analysis.FLIP_TEST_DAYS = 0.5       -- rebonds encore inconnus : on n'achète qu'une demi-journée de ventes
 Analysis.FLIP_TEST_MAX_QTY = 20     -- ... sans dépasser 20 unités (le volume estimé peut être gonflé par les annulations)
 Analysis.FLIP_TEST_MAX_COST = 200000 -- ... ni 20 po d'achat
+-- Pic de prix : le prix du jour dépasse nettement le prix habituel des jours d'avant
+Analysis.SPIKE_RATIO = 1.5      -- au-delà de 1,5 × le prix habituel, c'est un pic
+Analysis.SPIKE_MIN_DAYS = 3     -- prix habituel : médiane d'au moins 3 jours (AHLedger, sinon Auctionator)
+Analysis.SPIKE_SETTLE_DAYS = 5  -- un pic qui tient 5 jours est le nouveau prix (comme Rebound.SETTLE_DAYS)
 
 local History = ns.History
 
@@ -86,6 +90,47 @@ function Analysis.ShortTrend(db, id, now)
   return b and (math.exp(b) - 1), last[2] / first[2] - 1, #pts, (last[1] - first[1]) / 3600
 end
 
+-- Prix habituel d'un objet avant aujourd'hui : médiane des prix par jour des 13 jours précédents
+-- (prix AHLedger du jour, sinon minimum Auctionator de ce jour). Renvoie aussi le nombre de jours
+-- d'affilée, aujourd'hui compris, où le prix dépasse SPIKE_RATIO × ce prix habituel.
+-- nil si moins de SPIKE_MIN_DAYS jours connus.
+function Analysis.UsualPrice(h, id, today, priceNow)
+  local byAge = {}
+  for d = today - 13, today - 1 do
+    local r = History.parse(h and h[d])
+    if r and r.pN > 0 then byAge[today - d] = r.pSum / r.pN end
+  end
+  if ns.Bridge then
+    for _, e in ipairs(ns.Bridge.History(id, 14) or {}) do
+      local age = -e[1]
+      if age >= 1 and age <= 13 and not byAge[age] then byAge[age] = e[2] end
+    end
+  end
+  local list = {}
+  for _, p in pairs(byAge) do list[#list + 1] = p end
+  if #list < Analysis.SPIKE_MIN_DAYS then return nil end
+  table.sort(list)
+  local m = (#list + 1) / 2
+  local usual = (list[math.floor(m)] + list[math.ceil(m)]) / 2
+  local high = priceNow and priceNow > usual * Analysis.SPIKE_RATIO and 1 or 0
+  if high > 0 then
+    for age = 1, 13 do
+      local p = byAge[age]
+      if p then
+        if p > usual * Analysis.SPIKE_RATIO then high = high + 1 else break end
+      end
+    end
+  end
+  return usual, high
+end
+
+-- Ce que rapporte une unité pour une décision qui prend des jours (fabriquer, acheter au PNJ, stocker) :
+-- au prix habituel pendant un pic, sinon comme netExp
+function Analysis.SafeNet(s)
+  if not s then return nil end
+  return s.netSafe or s.netExp
+end
+
 -- Statistiques d'un objet sur les 14 derniers jours
 function Analysis.ItemStats(db, id, today)
   local h = db.hist and db.hist[id]
@@ -147,6 +192,15 @@ function Analysis.ItemStats(db, id, today)
       s.listedPrice, s.price, s.capped = s.price, s.ev.maxSold, true
     end
   end
+  -- Pic de prix (cas réel des Pilferer's Gloves le 24/11/2026 : ~50 pa d'habitude, 1 po 66 le jour même,
+  -- avec des « ventes » à 1 po 66 qui étaient surtout des annonces remises en vente). Vendre ce qu'on a
+  -- se fait au prix du jour ; fabriquer, acheter au PNJ ou stocker se décide au prix habituel, tant que
+  -- le pic n'a pas tenu SPIKE_SETTLE_DAYS jours.
+  local usual, highDays = Analysis.UsualPrice(h, id, today, s.price)
+  s.usual = usual
+  if usual and highDays > 0 and highDays < Analysis.SPIKE_SETTLE_DAYS then
+    s.spike, s.spikeDays = true, highDays
+  end
   s.perDay = w.obs > 0 and (w.sold + 0.5 * w.amb) / w.obs * 86400 or nil
   -- annulations et relistes écartées des ventes (Scan.Diff), pour le rapport et l'infobulle
   s.relistPerDay = w.obs > 0 and w.can > 0 and w.can / w.obs * 86400 or nil
@@ -207,7 +261,8 @@ function Analysis.ItemStats(db, id, today)
   s.deposit = (s.vendorSell or 0) * Analysis.DEPOSIT_RATE
   local st = math.max(s.sellThrough or 0.67, 0.1)
   s.netExp = s.net - s.deposit * (1 - st) / st
-  s.gpd = s.perDay and math.max(s.netExp, 0) * s.perDay or 0   -- or que ce marché rapporte par jour
+  if s.spike then s.netSafe = s.usual * (1 - Analysis.AH_CUT) - s.deposit * (1 - st) / st end
+  s.gpd = s.perDay and math.max(Analysis.SafeNet(s), 0) * s.perDay or 0   -- or que ce marché rapporte par jour
 
   -- Concurrence (dernier scan)
   local book = db.book and ns.Scan.UnpackBook(db.book[id])
@@ -231,6 +286,7 @@ function Analysis.ItemStats(db, id, today)
     sig[#sig + 1] = "dominé"; mult = mult * 0.85                  -- un gros vendeur fait la loi : guerre de prix
   end
   if s.sellThrough and s.sellThrough < 0.4 then sig[#sig + 1] = "invendus" end
+  if s.spike then sig[#sig + 1] = "pic" end
   if ns.Prof and ns.Prof.Tag(id) then sig[#sig + 1] = ns.Prof.Tag(id) end
   if s.obsHours < 6 then sig[#sig + 1] = "peu de données" end
   s.signals = sig
@@ -288,7 +344,7 @@ end
 
 function Analysis.VendorFlip(id, s, v, real)
   if not (s and v and v.p and v.p > 0) then return nil end  -- relevé PNJ absent ou arrondi à 0c (ancienne version)
-  local margin = s.netExp - v.p                             -- commission et dépôts perdus déduits
+  local margin = Analysis.SafeNet(s) - v.p                  -- commission et dépôts perdus déduits, hors pic
   if margin < 1 then return nil end
   local cap = (v.lim and v.lim > 0) and v.lim or math.huge
   local vol = math.min((s.perDay or 0) * Analysis.VENDOR_SHARE, cap)
@@ -386,6 +442,7 @@ function Analysis.FlipFor(s, book, odds)
   if not (s and book and s.realPrice and s.perDay and s.perDay >= 1) then return nil end
   local target = s.realPrice
   if s.avg7 and s.avg7 < target then target = s.avg7 end -- prudence : on ne revend pas au-dessus du prix affiché moyen
+  if s.spike and s.usual < target then target = s.usual end -- ni au prix d'un pic qui peut retomber avant la revente
   local st = math.max(s.sellThrough or 0.67, 0.1)
   local depLoss = s.deposit * (1 - st) / st
   local function net(p) return p * (1 - Analysis.AH_CUT) - depLoss end
@@ -476,10 +533,10 @@ function Analysis.Crafts()
         if c then cost = cost + c * n; if src == "HV" then fromAH = fromAH + 1 end else missing = missing + 1 end
       end
       local made = r.m or 1
-      local value = s and math.max(s.netExp, 0) * made
+      local value = s and math.max(Analysis.SafeNet(s), 0) * made   -- au prix habituel pendant un pic
       local vsell = (AHLedgerDB.items[outId] and AHLedgerDB.items[outId].s or 0) * made
       local e = { id = outId, s = s, prof = prof, name = r.n, made = made, cost = missing == 0 and cost or nil, missing = missing,
-                  value = value, vendorValue = vsell, perDay = s and s.perDay, diff = r.d }
+                  value = value, vendorValue = vsell, perDay = s and s.perDay, diff = r.d, spike = s and s.spike }
       if e.cost then
         local best = math.max(value or 0, vsell)
         e.profit = best - e.cost
@@ -526,7 +583,7 @@ local function craftUpEntry(id, raw, rec, learned, learnCost)
   local so = Analysis.Get(rec.out)
   local meta = AHLedgerDB.items[rec.out]
   local vend = (meta and meta.s or 0) * made
-  local ah = so and math.max(so.netExp or 0, 0) * made or 0
+  local ah = so and math.max(Analysis.SafeNet(so) or 0, 0) * made or 0
   local sellTo, value = "HV", ah
   if vend >= ah then sellTo, value = "PNJ", vend end
   if value <= 0 then return nil end
