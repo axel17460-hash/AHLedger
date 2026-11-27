@@ -12,6 +12,7 @@ ns.Auctions = Auctions
 
 Auctions.ASK_DELAY = 4          -- secondes après l'ouverture de l'HV avant de demander la liste soi-même
 Auctions.TOO_HIGH = 1.2         -- plus de 20 % au-dessus du prix réel de vente : trop cher
+Auctions.BAND_LEFT = { [0] = 30 * 60, [1] = 2 * 3600, [2] = 12 * 3600, [3] = 48 * 3600 } -- bandes de temps restant de l'API moderne, si timeLeftSeconds manque
 Auctions.CLASSIC_LEFT = { 30 * 60, 2 * 3600, 12 * 3600, 48 * 3600 } -- durée restante max des catégories Classic 1 à 4
 
 local function store(list)
@@ -40,7 +41,7 @@ function Auctions.ReadModern()
         if unit and unit <= 0 then unit = nil end
         if unit and sold then unit = unit / qty end
         list[#list + 1] = { id = id, qty = qty, unit = unit, bid = tonumber(r.bidAmount) or 0, sold = sold,
-                            left = not sold and tonumber(r.timeLeftSeconds) or nil,
+                            left = not sold and (tonumber(r.timeLeftSeconds) or Auctions.BAND_LEFT[r.timeLeft]) or nil,
                             aid = tonumber(r.auctionID) } -- numéro d'enchère : sert à l'annuler (Sell.CancelNext)
       end
     end

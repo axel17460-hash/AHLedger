@@ -51,6 +51,9 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 5. Le numéro d'enchère (`auctionID` de `GetOwnedAuctionInfo`) est stocké dans `Auctions` (champ `aid`) : sans lui, « Annuler suivante » ne fait rien. Rouvre l'HV pour relire tes enchères après une mise à jour de l'addon.
 6. L'interface n'a pas été vue : colonnes, grisé des lignes bloquées, bouton « Poster suivant » (largeur 120 px), pied de page de la file.
 7. Le carnet vient du dernier scan : une enchère postée après lui n'est pas retirée du carnet (`Sell.WithoutMine` n'enlève que ce qu'il y retrouve). Rescanne après une série de mises en vente.
+8. Prix toujours en multiples de 1 pa (le cuivre est refusé sans message par l'HV) ; le dépôt est estimé pour 24 h quelle que soit la durée posée (écart réel non modélisé, faible).
+9. Le jeu peut demander une confirmation (`needsConfirmation`) ou renvoyer `AUCTION_HOUSE_POST_ERROR` : le code ne compte alors rien et le dit. Signale ce que tu vois. Les raccourcis passent par deux boutons cachés (`AHLedgerPostButton`, `AHLedgerCancelButton`). Le carnet doit dater de moins de 2 h pour poster ou annuler.
+10. « off » sur une règle la désactive pour sa portée (objet, catégorie, défaut) ; une valeur hors bornes est refusée.
 Pas encore fait (dans le design `conception-vente.md`) : résumé de session (vendu, commission) dans l'onglet Farm ; coût de farm connu dans le plancher (seuls tes achats comptent) ; pas de file pour la banque.
 
 ## Prochaines étapes, dans l'ordre

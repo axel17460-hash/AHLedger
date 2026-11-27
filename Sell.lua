@@ -19,12 +19,20 @@ Sell.REPOST_MIN_GAIN = 100     -- gain attendu mini (cuivre) pour proposer d'ann
 Sell.TOL = 1                   -- cuivre d'écart toléré pour reconnaître ta propre enchère dans le carnet
 Sell.PIN_SECONDS = 4           -- après un post, l'objet n'est pas reproposé avant que les sacs soient relus
 Sell.LOGIN_MAX_AGE = 3 * 86400 -- au login, on ne résume que des relevés de moins de 3 jours
+Sell.SILVER = 100              -- l'API d'HV n'accepte que des prix en argent entiers : le cuivre fait échouer la mise en vente sans erreur
+Sell.MAX_BOOK_AGE = 2 * 3600   -- au-delà, le carnet du dernier scan est trop vieux pour poster ou annuler
+Sell.FAIL_SKIP = 30            -- une ligne qui vient d'échouer est sautée 30 s (elle ne bloque pas la file)
+
+-- Ce que tu viens de poster, par objet : { qty, t }. Le jeu ne prévient pas d'une mise en vente (la liste de tes
+-- enchères n'est relue qu'à la demande) : sans ce compte, chaque clic reposterait « un jour de ventes ».
+Sell.pending = {}
+Sell.failed = {} -- id → heure du dernier échec
 
 -- Règles par défaut. Trois niveaux, le plus précis gagne : défaut → catégorie (classID) → objet.
 -- Une valeur `false` désactive une règle héritée (ex. undercutPct = false : retour à l'undercut en cuivre).
 Sell.DEFAULT_RULES = {
   undercutPct = false,    -- undercut en % du palier visé (ex. 0.02) ; sinon undercutCopper
-  undercutCopper = 1,     -- 1 c sous le moins cher qui n'est pas à toi
+  undercutCopper = 100,   -- 1 pa sous le moins cher qui n'est pas à toi (l'HV n'accepte pas le cuivre : arrondi à l'argent)
   vendorMargin = 0.10,    -- plancher : rachat PNJ + 10 % (commission déduite)
   minProfit = 0.10,       -- plancher : coût d'achat connu (courriers) + 10 %
   floorPct = 0.70,        -- plancher : 70 % du prix réel de vente
@@ -137,7 +145,7 @@ function Sell.Floor(id, s, rules)
     consider(s.price * rules.floorPct, ("%.0f %% du prix réel"):format(rules.floorPct * 100))
   end
   if rules.floorFixed then consider(rules.floorFixed, "plancher fixé") end
-  return math.ceil(best), why
+  return math.ceil(best / Sell.SILVER) * Sell.SILVER, why
 end
 
 -- Tes enchères en cours pour cet objet : { {unit, qty} } (les enchères vendues et sans rachat sont ignorées)
@@ -154,6 +162,12 @@ end
 function Sell.Listed(id)
   local n = 0
   for _, m in ipairs(Sell.MyUnits(id)) do n = n + m.qty end
+  local p = Sell.pending[id]
+  if p then
+    local data = ns.Prof.Char().auctions
+    if data and data.t > p.t then Sell.pending[id] = nil -- la liste a été relue depuis : elle contient déjà ces mises en vente
+    else n = n + p.qty end
+  end
   return n
 end
 
@@ -225,6 +239,12 @@ function Sell.Quote(id, opts)
   else
     tier = levels[1] and levels[1][1]
   end
+  if not tier and #levels >= (ns.Scan.BOOK_LEVELS or 15) then
+    -- le carnet est tronqué (15 niveaux) et rien n'y est au-dessus du plancher : ce n'est pas un rayon vide
+    q.status, q.action, q.duration = "plancher", rules.belowFloor or "keep", 48
+    q.reason = "carnet tronqué, tout est sous ton plancher : rescanne"
+    return q
+  end
   if not tier then
     -- rayon vide (ou seulement des bradeurs) : on retombe sur le prix habituel, sans undercut
     tier = s and s.price
@@ -235,21 +255,28 @@ function Sell.Quote(id, opts)
   -- Undercut : pénurie → le plus petit possible (on vise haut) ; afflux → doublé (on veut partir vite)
   local step = 0
   if not q.noCompetition then
-    step = rules.undercutPct and math.max(1, math.floor(tier * rules.undercutPct)) or (rules.undercutCopper or 1)
-    if sig["pénurie"] then step = 1 end
+    step = rules.undercutPct and math.floor(tier * rules.undercutPct) or (rules.undercutCopper or Sell.SILVER)
+    if sig["pénurie"] then step = Sell.SILVER end
     if sig["afflux"] then step = step * 2 end
-    step = math.max(1, math.floor(step))
+    step = math.max(Sell.SILVER, math.floor(step / Sell.SILVER + 0.5) * Sell.SILVER)
   end
-  local price = math.max(1, math.floor(tier - step))
+  -- prix en argent entier, au moins 1 pa (cuivre refusé par l'API sans message)
+  local function silver(v) return math.max(Sell.SILVER, math.floor(v / Sell.SILVER) * Sell.SILVER) end
+  local price = silver(tier - step)
 
   -- Plafond : jamais au-dessus de ceilMult × le prix réel (un peu plus haut en pénurie)
   local mult = rules.ceilMult
   if mult and sig["pénurie"] then mult = mult + 0.2 end
-  q.ceil = (mult and s and s.price) and math.floor(s.price * mult) or nil
+  q.ceil = (mult and s and s.price) and silver(s.price * mult) or nil
   if rules.fixedPrice then
-    price, q.fixed = math.max(1, math.floor(rules.fixedPrice)), true -- ton prix : ni undercut ni plafond, le plancher reste
-  elseif q.ceil and price > q.ceil then
-    price, q.capped = q.ceil, true
+    price, q.fixed = silver(rules.fixedPrice), true -- ton prix : ni undercut ni plafond, le plancher reste
+  else
+    if q.ceil and price > q.ceil then price, q.capped = q.ceil, true end
+    -- jamais au-dessus du plus haut prix vu vendu quand rien ne s'est vendu plus cher (comme le conseil des sacs)
+    if ns.Trust and s then
+      local level, _, maxSold = ns.Trust.Check(s, price)
+      if level == "bad" and maxSold and price > maxSold then price, q.trustCap = silver(maxSold), true end
+    end
   end
 
   q.tier, q.step = tier, step
@@ -280,6 +307,7 @@ function Sell.Quote(id, opts)
   end
   if q.ignored then parts[#parts + 1] = ("%d u. bradées ignorées"):format(q.ignored) end
   if q.capped then parts[#parts + 1] = "plafond" end
+  if q.trustCap then parts[#parts + 1] = "rien vu vendu plus cher" end
   if sig["pénurie"] then parts[#parts + 1] = "pénurie" end
   if sig["afflux"] then parts[#parts + 1] = "afflux" end
   if q.status == "plancher" then
@@ -308,8 +336,10 @@ function Sell.Plan(id, have, adv)
   local listed = Sell.Listed(id)
   planned = math.min(have, planned - listed) -- ne pas inonder : ce qui est déjà en vente compte
   if planned < 1 then return nil end
-  local qty = math.min(planned, r.stackSize or planned)
+  local qty = math.floor(math.min(planned, r.stackSize or planned))
+  if qty < 1 then return nil end
   local e = { id = id, have = have, qty = qty, planned = planned, listed = listed, q = q, s = q.s,
+              priceSort = q.price or 0,
               status = q.status, price = q.price, tier = q.tier, floor = q.floor, duration = q.duration,
               reason = q.reason, reset = q.reset }
   local shown = q.price or q.wouldPost or 0
@@ -337,6 +367,14 @@ function Sell.Queue()
   local out = {}
   for id, n in pairs(c.bags or {}) do
     local adv = ns.Bags.Advise(id, n)
+    if adv and adv.action == "Attendre" then
+      -- le conseil des sacs voit un bradeur tout en bas du carnet ; si l'anti-troll l'écarte, on peut vendre
+      local q = Sell.Quote(id)
+      if q and q.status == "ok" and q.ignored then
+        local s = q.s
+        adv = { action = "Vendre HV", postQty = (s and s.perDay) and math.max(1, math.min(n, math.ceil(s.perDay))) or n }
+      end
+    end
     if adv and adv.action == "Vendre HV" then
       local e = Sell.Plan(id, n, adv)
       if e then out[#out + 1] = e end
@@ -355,14 +393,19 @@ end
 -- qui n'est pas bloquée. Un objet à peine posté n'est pas reproposé avant que les sacs soient relus.
 function Sell.Next(queue)
   queue = queue or Sell.Queue()
-  local function recent(id) return Sell.last and Sell.last.id == id and time() - Sell.last.t < Sell.PIN_SECONDS end
+  local now = time()
+  local function skip(e)
+    if e.blocked then return true end
+    if Sell.last and Sell.last.id == e.id and now - Sell.last.t < Sell.PIN_SECONDS then return true end
+    return Sell.failed[e.id] and now - Sell.failed[e.id] < Sell.FAIL_SKIP -- une ligne en échec ne bloque pas la suivante
+  end
   if Sell.pinned then
     for _, e in ipairs(queue) do
-      if e.id == Sell.pinned and not e.blocked and not recent(e.id) then return e end
+      if e.id == Sell.pinned and not skip(e) then return e end
     end
   end
   for _, e in ipairs(queue) do
-    if not e.blocked and not recent(e.id) then return e end
+    if not skip(e) then return e end
   end
 end
 
@@ -515,23 +558,23 @@ end)
 -- Poster et annuler (un clic ou une touche = une action)
 ------------------------------------------------------------------------
 
--- Premier emplacement de l'objet dans les sacs et nombre total d'exemplaires non liés
+-- Premier emplacement de l'objet dans les sacs, nombre total d'exemplaires non liés (ni verrouillés) et taille de la 1re pile
 function Sell.FindItem(id)
   local C = C_Container
   if not (C and C.GetContainerNumSlots and C.GetContainerItemInfo and ItemLocation and ItemLocation.CreateFromBagAndSlot) then
     return nil, 0
   end
-  local first, total = nil, 0
+  local first, total, firstCount = nil, 0, 0
   for bag = 0, 4 do
     for slot = 1, C.GetContainerNumSlots(bag) or 0 do
       local i = C.GetContainerItemInfo(bag, slot)
-      if i and i.itemID == id and not i.isBound then
-        first = first or ItemLocation:CreateFromBagAndSlot(bag, slot)
+      if i and i.itemID == id and not i.isBound and not i.isLocked then
+        if not first then first, firstCount = ItemLocation:CreateFromBagAndSlot(bag, slot), i.stackCount or 1 end
         total = total + (i.stackCount or 1)
       end
     end
   end
-  return first, total
+  return first, total, firstCount
 end
 
 local DURATION_CODE = { [12] = 1, [24] = 2, [48] = 3 }
@@ -552,10 +595,22 @@ function Sell.SessionSold()
   return r
 end
 
+-- Le carnet du dernier scan sert à tout (prix, undercuts) : trop vieux, on ne poste ni n'annule.
+function Sell.BookCheck()
+  local at = ns.realmDB().lastScanTime
+  if not at then return false, "pas encore de scan : clique « Scanner l'HV »" end
+  local age = time() - at
+  if age > Sell.MAX_BOOK_AGE then
+    return false, ("le dernier scan date de %d h : rescanne l'HV d'abord"):format(math.floor(age / 3600))
+  end
+  return true
+end
+
 -- Garde-fous : on ne poste jamais sous le plancher ni sous le rachat PNJ (net de commission), ni plus
 -- de 3 fois au-dessus du prix réel : une erreur de calcul ne doit pas coûter d'or.
 function Sell.Guard(e)
   if not e.price or e.price < 1 then return false, "pas de prix" end
+  if e.price % Sell.SILVER ~= 0 then return false, "prix avec du cuivre (l'HV le refuse sans message)" end
   if e.floor and e.price < e.floor then return false, "sous le plancher" end
   local meta = AHLedgerDB.items and AHLedgerDB.items[e.id]
   if meta and meta.s and meta.s > 0 and e.price * (1 - cut()) < meta.s then return false, "le marchand paierait plus" end
@@ -570,14 +625,19 @@ function Sell.Post(e)
     return false, "l'API de mise en vente n'est pas disponible (seule l'API C_AuctionHouse est gérée)"
   end
   if not ns.isAHOpen() then return false, "ouvre l'hôtel des ventes" end
+  local okb, whyb = Sell.BookCheck()
+  if not okb then return false, whyb end
   local ok, why = Sell.Guard(e)
   if not ok then return false, why end
-  local loc, total = Sell.FindItem(e.id)
-  if not loc or total < 1 then return false, "objet introuvable dans les sacs (ou lié)" end
+  local loc, total, firstCount = Sell.FindItem(e.id)
+  if not loc or total < 1 then return false, "objet introuvable dans les sacs (lié, verrouillé ou déjà posté)" end
   local qty = math.min(e.qty, total)
   if A.GetAvailablePostCount then
     local okc, avail = pcall(A.GetAvailablePostCount, loc)
-    if okc and type(avail) == "number" and avail > 0 then qty = math.min(qty, avail) end
+    if okc and type(avail) == "number" then
+      if avail < 1 then return false, "le jeu ne peut rien poster de cet objet (verrouillé ?)" end
+      qty = math.min(qty, avail)
+    end
   end
   local code = DURATION_CODE[e.duration] or 2
   -- marchandise (empilable, prix à l'unité) ou objet unique (prix de la pile entière) ?
@@ -591,31 +651,64 @@ function Sell.Post(e)
     local meta = AHLedgerDB.items and AHLedgerDB.items[e.id]
     commodity = not (meta and (meta.c == 2 or meta.c == 4))
   end
+  if not commodity and (firstCount or 1) > 1 then
+    -- on ne sait pas si le rachat d'une pile d'objets uniques est un prix par objet ou pour la pile
+    return false, "objet empilable qui n'est pas une marchandise : poste-le à la main"
+  end
   local price = math.floor(e.price)
+  local okp, needs
   if commodity then
-    A.PostCommodity(loc, code, qty, price)
+    okp, needs = pcall(A.PostCommodity, loc, code, qty, price)
   else
     qty = 1
-    A.PostItem(loc, code, 1, nil, price)
+    okp, needs = pcall(A.PostItem, loc, code, 1, nil, price)
   end
-  Sell.last = { id = e.id, t = time() }
+  if not okp then return false, "erreur du jeu : " .. tostring(needs) end
+  if needs then
+    -- le jeu attend une confirmation (retour needsConfirmation) : rien n'est posté, on ne compte pas
+    return false, "le jeu demande une confirmation avant de poster (à vérifier en jeu, signale-le)"
+  end
+  local net = price * qty * (1 - cut())
+  Sell.last = { id = e.id, t = time(), qty = qty, net = net }
+  local p = Sell.pending[e.id] or { qty = 0 }
+  p.qty, p.t = p.qty + qty, time()
+  Sell.pending[e.id] = p
   Sell.session.posted = Sell.session.posted + 1
-  Sell.session.net = Sell.session.net + price * qty * (1 - cut())
+  Sell.session.net = Sell.session.net + net
   local name = (AHLedgerDB.items[e.id] and AHLedgerDB.items[e.id].n) or ("#" .. e.id)
   ns.print(("Mise en vente : %s ×%d à %s/u, %d h (net attendu ~%s)."):format(
-    name, qty, ns.money(price), e.duration or 24, ns.money(price * qty * (1 - cut()))))
+    name, qty, ns.money(price), e.duration or 24, ns.money(net)))
   return true
 end
+
+-- Le jeu refuse une mise en vente (erreur serveur) : on annule ce qu'on avait compté
+ns.on("AUCTION_HOUSE_POST_ERROR", function()
+  local l = Sell.last
+  if not l then return end
+  local p = Sell.pending[l.id]
+  if p then p.qty = math.max(0, p.qty - l.qty) end
+  Sell.session.posted = math.max(0, Sell.session.posted - 1)
+  Sell.session.net = math.max(0, Sell.session.net - l.net)
+  Sell.failed[l.id] = time()
+  Sell.last = nil
+  ns.print("|cffff5050Le jeu a refusé la mise en vente.|r Rien n'a été posté.")
+end)
+ns.on("AUCTION_HOUSE_POST_WARNING", function()
+  ns.print("Le jeu a affiché un avertissement de mise en vente : confirme-le dans la fenêtre d'HV.")
+end)
 
 -- Un clic : poste la ligne suivante de la file
 function Sell.PostNext()
   local e = Sell.Next()
   if not e then
-    ns.print("Rien à poster : file vide ou tout est sous ton plancher (onglet « Mes objets » > « file de vente »).")
+    ns.print("Rien à poster : file vide, tout est sous ton plancher, ou les lignes viennent d'échouer (onglet « Mes objets » > « file de vente »).")
     return false
   end
   local ok, why = Sell.Post(e)
-  if not ok then ns.print("|cffff5050Mise en vente impossible :|r " .. tostring(why)) end
+  if not ok then
+    Sell.failed[e.id] = time() -- la ligne suivante passera au prochain clic
+    ns.print("|cffff5050Mise en vente impossible :|r " .. tostring(why))
+  end
   return ok
 end
 
@@ -629,12 +722,24 @@ function Sell.CancelNext()
     return false
   end
   if not ns.isAHOpen() then ns.print("Ouvre l'hôtel des ventes."); return false end
+  local okb, whyb = Sell.BookCheck()
+  if not okb then ns.print("|cffff5050Annulation impossible :|r " .. whyb); return false end
   for _, g in ipairs(Sell.Undercuts()) do
     if g.worth then
       for _, a in ipairs(g.auctions) do
-        if a.aid then
-          a.cancelling = true
-          A.CancelAuction(a.aid)
+        -- jamais une enchère qui a reçu une offre : l'annuler coûte de l'or
+        local cost = 0
+        if A.GetCancelCost and a.aid then
+          local okc, c = pcall(A.GetCancelCost, a.aid)
+          if okc and type(c) == "number" then cost = c end
+        end
+        if a.aid and not (a.bid and a.bid > 0) and cost == 0 then
+          local okx, err = pcall(A.CancelAuction, a.aid)
+          if not okx then
+            ns.print("|cffff5050Annulation impossible :|r " .. tostring(err))
+            return false
+          end
+          a.cancelling = true -- seulement une fois l'appel passé : sinon elle disparaîtrait de tes enchères pour rien
           Sell.session.cancelled = Sell.session.cancelled + 1
           local name = (AHLedgerDB.items[g.id] and AHLedgerDB.items[g.id].n) or ("#" .. g.id)
           ns.print(("Annulation : %s ×%d à %s/u. Nouveau prix conseillé %s/u : reposte-le depuis la file de vente une fois l'objet récupéré."):format(
@@ -644,26 +749,30 @@ function Sell.CancelNext()
       end
     end
   end
-  ns.print("Rien à annuler : aucune enchère battue qui vaille un repost (ou rouvre l'HV pour relire tes enchères).")
+  ns.print("Rien à annuler : aucune enchère battue qui vaille un repost, sans offre dessus (ou rouvre l'HV pour relire tes enchères).")
   return false
 end
 
--- Fonctions globales pour les raccourcis clavier (Bindings.xml) : une touche = une action
+-- Raccourcis clavier (Bindings.xml) : une touche = un « clic » sur un bouton caché, donc une action, comme le bouton de la fenêtre
 BINDING_HEADER_AHLEDGER = "AHLedger"
 BINDING_NAME_AHLEDGER_POSTNEXT = "Poster la suivante (file de vente)"
 BINDING_NAME_AHLEDGER_CANCELNEXT = "Annuler l'enchère battue suivante"
-function AHLedger_PostNext() ns.safe("poster suivant", Sell.PostNext) end
-function AHLedger_CancelNext() ns.safe("annuler suivante", Sell.CancelNext) end
+local function hiddenButton(name, label, fn)
+  local b = CreateFrame("Button", name, UIParent)
+  b:SetScript("OnClick", function() ns.safe(label, fn) end)
+  return b
+end
+hiddenButton("AHLedgerPostButton", "poster suivant", Sell.PostNext)
+hiddenButton("AHLedgerCancelButton", "annuler suivante", Sell.CancelNext)
 
 -- Texte de session pour le pied de page
 function Sell.SessionText()
   local s = Sell.session
-  local text = ("session : %d posée%s (~%s net), %d annulée%s"):format(
+  local text = ("session : %d posée%s (~%s), %d annulée%s"):format(
     s.posted, s.posted > 1 and "s" or "", plain(ns.money(s.net)), s.cancelled, s.cancelled > 1 and "s" or "")
   local sold = Sell.SessionSold()
   if sold.units > 0 then
-    text = text .. (" · encaissé %d u., commission %s, net %s"):format(
-      sold.units, plain(ns.money(sold.cut)), plain(ns.money(sold.net)))
+    text = text .. (" · encaissé %d u., net %s"):format(sold.units, plain(ns.money(sold.net)))
   end
   return text
 end
@@ -688,14 +797,21 @@ local function parseValue(key, text)
     if p then return { pct = tonumber(p) / 100 } end
     return Sell.ParseMoney(low)
   elseif key == "floorPct" or key == "vendorMargin" or key == "minProfit" then
-    local p = low:match("^(%d+%.?%d*)%s*%%?$")
-    return p and tonumber(p) / 100 or nil
+    -- « 70% » ou « 70 » = 70 % ; « 0.7 » = 70 % aussi (une valeur ≤ 1 sans % est déjà une fraction)
+    local num, pct = low:match("^(%d+%.?%d*)%s*(%%?)$")
+    num = tonumber(num)
+    if not num then return nil end
+    local v = (pct == "%" or num > 1) and num / 100 or num
+    local max = key == "floorPct" and 1 or 5
+    return (v > 0 and v <= max) and v or nil
   elseif key == "ceilMult" then
-    return tonumber(low)
+    local v = tonumber(low)
+    return (v and v >= 1 and v <= 10) and v or nil
   elseif key == "stackSize" or key == "stacks" or key == "duration" then
     local n = tonumber(low)
-    if key == "duration" and not DURATION_CODE[n or 0] then return nil end
-    return n and math.floor(n) or nil
+    if not n or n < 1 then return nil end
+    if key == "duration" and not DURATION_CODE[math.floor(n)] then return nil end
+    return math.floor(n)
   elseif key == "belowFloor" then
     return BELOW_ALIAS[low]
   elseif key == "floorFixed" or key == "fixedPrice" then
