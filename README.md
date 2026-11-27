@@ -66,6 +66,9 @@ Un addon ne peut pas communiquer avec l'extérieur. AHLedger prépare donc un ra
 4. En jeu : un scan, puis `/reload` (ou déconnexion). Le jeu n'écrit ses fichiers qu'à ce moment-là. Le script copie alors le rapport dans `Mon Drive/AHLedger/rapport.md`, et garde les 30 derniers dans `historique/`.
 5. Dans Claude : « regarde mon HV ». Claude lit `rapport.md` dans ton Drive.
 
+### Méthode d'analyse (`METHODE.md`)
+Pour que les conseils restent cohérents d'une séance à l'autre, `METHODE.md` (racine de l'addon) dit à Claude comment lire chaque section du rapport (sens des chiffres, origine dans le code, fiabilité), dans quel ordre décider (fiabilité, liquidité, gain par minute, tendance), les seuils du code, les pièges (peu de données, pics, bradeurs, biais de scan, commission non calibrée) et le gabarit d'une réponse : court, actions chiffrées, jamais d'automatisation ni plus d'or engagé que tu n'en as. La 2e ligne du rapport renvoie à `METHODE.md` avec sa version (`Export.METHODE`) ; `tools/ahledger.py sync` copie le fichier à côté de `rapport.md` dans Drive. Hors Drive, donne-le à Claude avec le rapport.
+
 ## Module Vente : comment le prix est choisi
 Pour un objet, avec le carnet du dernier scan **sans tes propres enchères** :
 1. **Plancher/u** = le plus grand de : rachat PNJ + 10 % (commission déduite), ton coût d'achat moyen (courriers d'HV) + 10 %, 70 % du prix réel de vente, et un plancher fixé à la main.

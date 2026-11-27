@@ -31,7 +31,8 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 | `Track.lua` | Fiabilité des conseils : note les flips / achats PNJ conseillés à chaque scan (`db.track`), les vérifie sur les scans suivants (prix tenu, écoulé) et les rapproche de tes achats réels ; vue « fiabilité » de l'onglet Bilan, `/ahl fiabilite` |
 | `RecipeDB.lua` | Fournisseurs de recettes (`RecipeDB.Register`) et planificateur de montée (`/ahl monter cuir 225`) |
 | `Sell.lua` | Module Vente (v0.9) : règles de prix par défaut / catégorie / objet (`AHLedgerDB.sell`), prix proposé (`Sell.Quote` : carnet sans tes enchères, anti-troll, plancher, plafond, undercut, durée), file de mise en vente (`Sell.Queue`, une ligne = un clic), enchères battues et gain de repost (`Sell.Undercuts`), résumé à l'ouverture de l'HV, `Sell.Post` / `Sell.CancelNext` (API `C_AuctionHouse`, un clic ou une touche = une action), `/ahl vendre …`. L'interface est dans `UI.lua` : vues « file de vente » et « undercuts » de l'onglet Mes objets. Raccourcis : `Bindings.xml` |
-| `Export.lua` | Rapport texte pour Claude (`/ahl claude`), aussi sauvé dans `AHLedgerDB.brief` |
+| `Export.lua` | Rapport texte pour Claude (`/ahl claude`), aussi sauvé dans `AHLedgerDB.brief` ; 2e ligne = renvoi à `METHODE.md` et sa version (`Export.METHODE`) |
+| `METHODE.md` | Méthode d'analyse du rapport pour Claude : lecture de chaque section, ordre de décision, seuils du code, pièges, gabarit de réponse. Copiée à côté de `rapport.md` par `sync`. Une constante change → mets à jour son § 5 ; la forme du rapport change → incrémente `Export.METHODE` |
 | `Diag.lua` | `/ahl diag` : API présentes, variante utilisée, événements refusés, erreurs |
 | `Bridge.lua`, `Tooltip.lua`, `UI.lua` | Auctionator, tooltips, fenêtre à 10 onglets (aussi en onglet de l'HV via LibAHTab) |
 | `tools/ahledger.py` | `import`, `report`, `brief`, `sync` (rapport vers Google Drive) ; `tools/sync_drive.bat` sous Windows |
@@ -59,13 +60,13 @@ Pas encore fait (dans le design `conception-vente.md`) : résumé de session (ve
    - le code d'Auctionator dans `Interface\AddOns\Auctionator`, pour vérifier les noms internes utilisés par `Bridge.lua` (`Auctionator.State.FullScanFrameRef`, `FullScan.Events.ScanComplete`, `Database.db`, `Constants.SCAN_DAY_0`, `API.v1.MultiSearch`).
 2. **Faire tourner chaque fonction une fois** : ouvrir les fenêtres de métier, la boîte aux lettres, la banque ; faire un scan ; parcourir les 10 onglets ; `/ahl monter cuir` ; `/ahl claude`.
 3. **Brancher un addon de recettes Forever.** Le joueur en choisit un (proposition : LibProfessionDB, fait pour être lu par d'autres addons ; autres pistes : Forever Recipes, Fabrikao!! Forever, My Forever Recipe Book). Lis sa structure de données dans `Interface\AddOns\<addon>` et écris un adaptateur `RecipeDB.Register(...)` au format décrit en tête de `RecipeDB.lua`. Seuils jaune/vert/gris → plan de montée complet ; source et prix des recettes → « recettes à apprendre ». Ajoute l'addon en `## OptionalDeps` du `.toc`.
-4. **Synchro Google Drive** : `tools\sync_drive.bat` (Python 3 et Google Drive pour ordinateur requis). Il écrit `Mon Drive/AHLedger/rapport.md`. Le dossier Drive `AHLedger` existe déjà, créé par la session cloud. Le connecteur Drive de Claude sert à lire ce rapport pour conseiller le joueur.
+4. **Synchro Google Drive** : `tools\sync_drive.bat` (Python 3 et Google Drive pour ordinateur requis). Il écrit `Mon Drive/AHLedger/rapport.md` et y copie `METHODE.md` (à lire avant de conseiller). Le dossier Drive `AHLedger` existe déjà, créé par la session cloud. Le connecteur Drive de Claude sert à lire ce rapport pour conseiller le joueur.
 5. **Idées validées, pas encore faites** :
    - onglet « Aujourd'hui » : plan de séance qui combine flip, artisanat, farm et ventes ;
    - meilleur jour et meilleure heure pour vendre (motifs dans `db.recent` et `db.days`) ;
    - liste de surveillance avec alertes de prix ;
-   - résumé quotidien envoyé par Gmail à partir du rapport Drive ;
-   - méthode d'analyse écrite pour que les conseils de Claude restent cohérents.
+   - résumé quotidien envoyé par Gmail à partir du rapport Drive.
+   (Fait : la méthode d'analyse écrite, `METHODE.md`.)
 
 ## Conventions
 - Toute fonction du jeu est détectée avant d'être appelée (variantes Classic et Retail) ; les gestionnaires passent par `ns.safe`.

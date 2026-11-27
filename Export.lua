@@ -11,6 +11,10 @@ local _, ns = ...
 local Export = {}
 ns.Export = Export
 
+-- Version de METHODE.md (racine du dépôt, copiée à côté de rapport.md par tools/ahledger.py sync) :
+-- comment Claude lit ce rapport. À relever quand la méthode change.
+Export.METHODE = 1
+
 Export.TOP = { market = 25, rising = 10, flip = 12, craft = 12, recipes = 12, undercut = 12, bags = 25, auctions = 30, ledger = 12, vendor = 8, farm = 6 }
 
 local function plain(s) return (tostring(s or "?"):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")) end
@@ -43,6 +47,7 @@ function Export.Build()
   local c = ns.Prof.Char()
 
   add("# AHLedger — rapport pour Claude (%s)", date("%Y-%m-%d %H:%M"))
+  add("Méthode de lecture : METHODE.md v%d (à côté de ce rapport dans Drive, ou à la racine de l'addon) : lis-la avant de conseiller.", Export.METHODE)
   add("Royaume : %s · Perso : %s niv. %s %s · Or : %s", ns.realmKey(), plain(UnitName("player")),
     tostring(UnitLevel and UnitLevel("player") or "?"), plain(UnitClass and UnitClass("player") or "?"),
     g(A.Gold() or 0))

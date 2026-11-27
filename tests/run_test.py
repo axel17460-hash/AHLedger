@@ -378,6 +378,9 @@ with tempfile.TemporaryDirectory() as d:
     subprocess.run([sys.executable, str(tool), "sync", "--sv", str(sv), "--to", d, "--once"], check=True, stdout=subprocess.DEVNULL)
     assert (Path(d) / "rapport.md").read_text(encoding="utf-8") == brief.rstrip("\n")
     assert len(list((Path(d) / "historique").glob("rapport-*.md"))) == 1
+    # la méthode de lecture voyage avec le rapport, qui y renvoie avec sa version
+    assert (Path(d) / "METHODE.md").read_text(encoding="utf-8") == (ROOT / "METHODE.md").read_text(encoding="utf-8")
+    assert "METHODE.md v%d" % ns.Export.METHODE in brief
     # Plusieurs comptes Google : le lecteur qui a déjà un dossier AHLedger gagne, sinon le premier trouvé
     import importlib.util
     spec = importlib.util.spec_from_file_location("ahledger_tool", tool)

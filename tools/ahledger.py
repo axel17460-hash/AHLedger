@@ -7,7 +7,8 @@ Usage :
   python ahledger.py brief  "<...>/SavedVariables/AHLedger.lua" [--out rapport.md]
       (rapport pour Claude, enregistré par l'addon après chaque scan et à la déconnexion)
   python ahledger.py sync [--sv <AHLedger.lua>] [--to <dossier Google Drive>] [--once]
-      (surveille les SavedVariables et copie le rapport dans Google Drive à chaque /reload ou déconnexion ;
+      (surveille les SavedVariables et copie le rapport dans Google Drive à chaque /reload ou déconnexion,
+       avec METHODE.md, la méthode de lecture du rapport ;
        sans options, trouve tout seul le fichier de l'addon et le dossier « Mon Drive »)
 
 Rien ici ne touche au jeu : le script lit uniquement le fichier écrit par le client
@@ -366,6 +367,15 @@ def write_report(sv, dest):
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, dest / "rapport.md")
     (hist / f"rapport-{stamp}.md").write_text(text, encoding="utf-8")
+    # la méthode de lecture du rapport (METHODE.md, racine de l'addon) voyage avec lui
+    methode = Path(__file__).resolve().parent.parent / "METHODE.md"
+    if methode.is_file():
+        m = methode.read_text(encoding="utf-8")
+        target = dest / "METHODE.md"
+        if not target.is_file() or target.read_text(encoding="utf-8") != m:
+            tmp = dest / "METHODE.md.tmp"
+            tmp.write_text(m, encoding="utf-8")
+            os.replace(tmp, target)
     old = sorted(hist.glob("rapport-*.md"))
     for f in old[:-HISTORY_KEEP]:
         f.unlink()
