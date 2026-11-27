@@ -32,10 +32,11 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 | `Track.lua` | Fiabilité des conseils : note les flips / achats PNJ conseillés à chaque scan (`db.track`), les vérifie sur les scans suivants (prix tenu, écoulé) et les rapproche de tes achats réels ; vue « fiabilité » de l'onglet Bilan, `/ahl fiabilite` |
 | `RecipeDB.lua` | Fournisseurs de recettes (`RecipeDB.Register`) et planificateur de montée (`/ahl monter cuir 225`) |
 | `Sell.lua` | Module Vente (v0.9) : règles de prix par défaut / catégorie / objet (`AHLedgerDB.sell`), prix proposé (`Sell.Quote` : carnet sans tes enchères, anti-troll, plancher, plafond, undercut, durée), file de mise en vente (`Sell.Queue`, une ligne = un clic ; lignes « banque » non postables), enchères battues et gain de repost (`Sell.Undercuts`), résumé à l'ouverture de l'HV, résumé de session « farmer ou acheter » (`Sell.SalesSummary`, `Sell.FarmCompare`, affiché dans l'onglet Farm), coût de farm dans le plancher (`Farm.UnitCost`, règle `farmCost`), `Sell.Post` / `Sell.CancelNext` (API `C_AuctionHouse`, un clic ou une touche = une action), `/ahl vendre …`. L'interface est dans `UI.lua` : vues « file de vente » et « undercuts » de l'onglet Mes objets. Raccourcis : `Bindings.xml` |
+| `Today.lua` | Onglet « Aujourd'hui » : plan de séance (`Today.Plan(minutes, or)`) qui réunit file de vente, reposts, flips, achats PNJ, artisanat, vente PNJ et farm ; classement glouton par gain/minute pondéré par la fiabilité (Trust + Track), sous contrainte de temps et d'or ; temps par action en constantes en tête du fichier ; `/ahl aujourdhui [minutes]`. Interface dans un bloc à part en fin de `UI.lua` (enveloppes de `UI.Build` / `UI.SetMode`) |
 | `Export.lua` | Rapport texte pour Claude (`/ahl claude`), aussi sauvé dans `AHLedgerDB.brief` ; 2e ligne = renvoi à `METHODE.md` et sa version (`Export.METHODE`) |
 | `METHODE.md` | Méthode d'analyse du rapport pour Claude : lecture de chaque section, ordre de décision, seuils du code, pièges, gabarit de réponse. Copiée à côté de `rapport.md` par `sync`. Une constante change → mets à jour son § 5 ; la forme du rapport change → incrémente `Export.METHODE` |
 | `Diag.lua` | `/ahl diag` : API présentes, variante utilisée, événements refusés, erreurs |
-| `Bridge.lua`, `Tooltip.lua`, `UI.lua` | Auctionator, tooltips, fenêtre à 10 onglets (aussi en onglet de l'HV via LibAHTab) |
+| `Bridge.lua`, `Tooltip.lua`, `UI.lua` | Auctionator, tooltips, fenêtre à 11 onglets (aussi en onglet de l'HV via LibAHTab) |
 | `tools/ahledger.py` | `import`, `report`, `brief`, `sync` (rapport vers Google Drive) ; `tools/sync_drive.bat` sous Windows |
 
 ## Hypothèses non vérifiées (à confirmer en jeu)
@@ -59,15 +60,21 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 11. File de la banque : ouvre la banque une fois, puis la file à l'HV : les lignes « (banque) » doivent être grisées en nom, action « Retirer », jamais postées par « Poster suivant » ni la touche.
 Moment de vente (`Timing.lua`), à vérifier en jeu : l'heure vient de `date()` (heure du PC, pas du serveur) ; regarder `/ahl moment` après une ou deux semaines de scans, et la taille de `timing` dans les SavedVariables. La durée de mise en vente de `Sell.lua` ne s'en sert pas encore (idée : préférer 24/48 h si le meilleur moment tombe après 12 h).
 
+## Onglet « Aujourd'hui » : à vérifier en jeu (testé seulement sur le marché simulé)
+1. Les temps supposés (`Today.POST_MIN`, `FLIP_MIN`, `VENDOR_TRAVEL_MIN`, `CRAFT_*`, `BANK_MIN`) : chronomètre une vraie séance et ajuste les constantes en tête de `Today.lua`.
+2. L'interface n'a pas été vue : 11 onglets dans 820 px (~72 px chacun, « Aujourd'hui » et « Sous-coter » tiennent-ils ?), les 4 boutons 15/30/60/120 min en haut à droite, la colonne « Action » (330 px, le texte entier au survol).
+3. L'onglet s'ouvre par défaut (enveloppe de `UI.Build`). Si c'est lent avec beaucoup d'objets (le plan relance Flips, Crafts, Sell.Queue… à chaque rafraîchissement), ajouter un cache sur `ns.dataVersion`.
+4. Le gain d'une mise en vente est le net attendu au prix de la file, pas pondéré par la chance de vendre ; le farm est valorisé par `Analysis.FarmZones` (or brut ramassé compris, qui inclut tes achats/ventes PNJ pendant la session).
+Limites connues : les recettes non apprises (onglet Rentables) ne sont pas proposées (pas une action de séance) ; une seule zone de farm ; pas de trajet entre actions (marchand, banque, métier comptés chacun à part).
+
 ## Prochaines étapes, dans l'ordre
 1. **Premier test en jeu.** Installe ou mets à jour l'addon, `/reload`, puis `/ahl diag`. Corrige chaque ligne MANQUE et chaque erreur. Avec une session locale, lis directement :
    - le fichier `World of Warcraft\_forever_\WTF\Account\<COMPTE>\SavedVariables\AHLedger.lua`, écrit à `/reload` ou à la déconnexion. `AHLedgerDB.diag.lines` contient le diagnostic, `AHLedgerDB.brief.text` le rapport ;
    - le code d'Auctionator dans `Interface\AddOns\Auctionator`, pour vérifier les noms internes utilisés par `Bridge.lua` (`Auctionator.State.FullScanFrameRef`, `FullScan.Events.ScanComplete`, `Database.db`, `Constants.SCAN_DAY_0`, `API.v1.MultiSearch`).
-2. **Faire tourner chaque fonction une fois** : ouvrir les fenêtres de métier, la boîte aux lettres, la banque ; faire un scan ; parcourir les 10 onglets ; `/ahl monter cuir` ; `/ahl claude`.
+2. **Faire tourner chaque fonction une fois** : ouvrir les fenêtres de métier, la boîte aux lettres, la banque ; faire un scan ; parcourir les 11 onglets ; `/ahl monter cuir` ; `/ahl claude`.
 3. **Brancher un addon de recettes Forever.** Le joueur en choisit un (proposition : LibProfessionDB, fait pour être lu par d'autres addons ; autres pistes : Forever Recipes, Fabrikao!! Forever, My Forever Recipe Book). Lis sa structure de données dans `Interface\AddOns\<addon>` et écris un adaptateur `RecipeDB.Register(...)` au format décrit en tête de `RecipeDB.lua`. Seuils jaune/vert/gris → plan de montée complet ; source et prix des recettes → « recettes à apprendre ». Ajoute l'addon en `## OptionalDeps` du `.toc`.
 4. **Synchro Google Drive** : `tools\sync_drive.bat` (Python 3 et Google Drive pour ordinateur requis). Il écrit `Mon Drive/AHLedger/rapport.md` et y copie `METHODE.md` (à lire avant de conseiller). Le dossier Drive `AHLedger` existe déjà, créé par la session cloud. Le connecteur Drive de Claude sert à lire ce rapport pour conseiller le joueur.
 5. **Idées validées, pas encore faites** :
-   - onglet « Aujourd'hui » : plan de séance qui combine flip, artisanat, farm et ventes ;
    - liste de surveillance avec alertes de prix ;
    - résumé quotidien envoyé par Gmail à partir du rapport Drive.
    (Fait : la méthode d'analyse écrite, `METHODE.md`.)

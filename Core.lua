@@ -255,13 +255,15 @@ local function slash(input)
     ns.Sell.Command(rest)
   elseif cmd == "moment" or cmd == "quand" then
     ns.Timing.Command(rest)
+  elseif cmd == "aujourdhui" or cmd == "aujourd'hui" or cmd == "today" then
+    ns.Today.Command(rest)
   elseif cmd == "prune" then
     local keep = tonumber(rest) or 0
     local r = ns.realmDB()
     while #r.scans > keep do table.remove(r.scans, 1) end
     ns.print(("Scans purgés, %d conservés. Pense à /reload pour écrire le fichier."):format(#r.scans))
   else
-    ns.print("Commandes : /ahl (fenêtre) | options | scan | status | metiers | bilan | fiabilite | vendre (file de vente, règles de prix) | moment [objet] (meilleur jour / heure pour vendre) | claude (rapport à copier) | diag | monter <métier> [niveau] | farm start | farm stop | prune <n> | raw on|off | debug")
+    ns.print("Commandes : /ahl (fenêtre) | options | scan | status | metiers | bilan | fiabilite | vendre (file de vente, règles de prix) | aujourdhui [minutes] (plan de séance) | moment [objet] (meilleur jour / heure pour vendre) | claude (rapport à copier) | diag | monter <métier> [niveau] | farm start | farm stop | prune <n> | raw on|off | debug")
   end
 end
 SlashCmdList.AHLEDGER = function(input) ns.safe("/ahl " .. (input or ""), slash, input) end

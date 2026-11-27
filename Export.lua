@@ -72,6 +72,8 @@ function Export.Build()
   end
   add("Unités : prix par unité sauf mention (g/s/c = or/argent/cuivre) ; tend = variation du prix par jour ; écoul = part des enchères vendues avant expiration ; stockJ = jours de ventes en rayon.")
 
+  Export.Today(add)
+
   local all = A.All().list
   local market = {}
   for _, s in ipairs(all) do if s.perDay and s.perDay >= 1 then market[#market + 1] = s end end
@@ -247,6 +249,19 @@ function Export.Build()
   end
   add("Question : d'après ces données, que dois-je faire en priorité pour gagner de l'or (vendre, acheter, fabriquer, farmer) ?")
   return table.concat(L, "\n")
+end
+
+-- Plan de séance (Today.lua) : ce qu'il y a de plus rentable à faire maintenant, en une heure
+Export.TODAY_MINUTES = 60
+function Export.Today(add)
+  if not ns.Today then return end
+  add("")
+  add("## Aujourd'hui : plan de séance de %d min (classé par gain/minute, fiabilité comprise)", Export.TODAY_MINUTES)
+  local ok, lines, total = pcall(ns.Today.Lines, Export.TODAY_MINUTES)
+  if not ok then add("plan indisponible : %s", plain(lines)); return end
+  add("%s", total)
+  if #lines == 0 then add("rien à proposer (scan, sacs, métiers ou sessions de farm manquants)") end
+  for _, l in ipairs(lines) do add("%s", l) end
 end
 
 -- Ce que tu as en vente en ce moment, comparé au dernier scan
