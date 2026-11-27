@@ -456,6 +456,8 @@ function Scan.Finish()
   ns.Snipe.FromScan(rows, now)
   if ns.Track then ns.safe("fiabilité", ns.Track.OnScan, db, now, diff) end
   if ns.Trust then ns.safe("prix tenus", ns.Trust.Record, db, now, diff, db.lastSigs, sigs) end
+  -- liste de surveillance : alertes de prix (après l'historique, pour les signaux et la moyenne 7 j)
+  if ns.Watch then ns.safe("surveillance", ns.Watch.OnScan, db, now, stats) end
 
   -- Snapshots bruts : seulement pour l'export Python (/ahl raw on), car volumineux
   if AHLedgerDB.keepRaw ~= false then

@@ -442,6 +442,34 @@ MODES.today = {
   end,
 }
 
+------------------------------------------------------------------------
+-- Surveillance (Watch.lua) : vue de l'onglet « Revente PNJ ». Bloc à part : il ne touche pas aux
+-- autres onglets (fusion plus simple avec les autres branches).
+------------------------------------------------------------------------
+MODES.watch = {
+  title = "Surveillance",
+  tab = false, -- vue de l'onglet Revente PNJ
+  sort = "name",
+  asc = true,
+  help = "Objets surveillés et leurs règles, vérifiées à chaque scan complet : alerte dans le chat (et son) quand une règle se déclenche, puis silence jusqu'à ce que la condition retombe. Jamais d'achat automatique. Ajouter : /ahl surveiller <lien> achat 1g20s vente 2g signal pénurie · retirer : /ahl surveiller retirer <objet>. Clic = rechercher l'objet.",
+  cols = {
+    { "Objet", 160, function(e) return itemLabel(e.id) end, "name" },
+    { "Règles", 210, function(e) return e.rules end, "rules" },
+    { "Prix act./u", 80, function(e) return ns.money(e.price) end, "price", "RIGHT" },
+    { "En vente", 55, function(e) return e.q and tostring(e.q) or "?" end, "q", "RIGHT" },
+    { "État", 60, function(e) return e.alerting and "|cffffd100alerte|r" or "|cff808080armé|r" end, "alertRank" },
+    { "Dernière alerte", 190, function(e)
+        return e.lastT and (date("%d/%m %H:%M", e.lastT) .. " " .. (e.lastWhy or "")) or "|cff808080—|r"
+      end, "lastT" },
+  },
+  rows = function() return ns.Watch.Rows() end,
+  footer = function() return ("son %s"):format(ns.Watch.DB().sound and "activé" or "coupé") end,
+}
+EMPTY.watch = "Aucun objet surveillé. Tape /ahl surveiller <lien ou nom> achat 1g20s (ou vente, signal pénurie, variation 20%, stock 50)."
+UI.VIEWS.snipe = { other = "watch", label = "Vue : surveillance" }
+UI.VIEWS.watch = { other = "snipe", label = "Vue : revente PNJ" }
+UI.PARENT.watch = "snipe"
+
 local function sortValue(e, key)
   if key == "name" then
     local meta = AHLedgerDB.items[e.id]

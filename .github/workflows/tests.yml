@@ -20,6 +20,8 @@ jobs:
         run: python tests/run_test.py
       - name: Module Vente (prix, file, undercuts, mise en vente)
         run: python tests/test_sell.py
+      - name: Surveillance (parseur de prix, alertes, anti-spam, réarmement)
+        run: python tests/test_watch.py
   luacheck:
     # informatif tant que les règles n'ont pas été ajustées sur un premier passage
     runs-on: ubuntu-latest
