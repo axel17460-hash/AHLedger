@@ -1,4 +1,4 @@
-# AHLedger (v0.9.0)
+# AHLedger (v0.10.0)
 
 Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l'hôtel des ventes et suit les hausses et baisses de prix, pour savoir quoi farmer avant tout le monde. L'analyse se fait entièrement en jeu.
 

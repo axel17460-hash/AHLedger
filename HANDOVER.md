@@ -10,7 +10,7 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 - Règles Blizzard à respecter : aucune automatisation d'achat ou de vente, aucun scan sans clic du joueur, pas de pub ni de dons.
 
 ## Dépôt
-- GitHub `axel17460-hash/AHLedger`, branche de travail **`ccr-b6ab2be1-rg4weg`** (version 0.8). `main` est en retard. Ne crée pas de pull request sans demande explicite.
+- GitHub `axel17460-hash/AHLedger`, branche de travail **`ccr-b6ab2be1-rg4weg`** (version 0.10.0). `main` est en retard. Ne crée pas de pull request sans demande explicite.
 - Tests (quatre) : `pip install lupa luaparser`, puis `python tests/check_globals.py` (variables globales), `python tests/run_test.py` (marché simulé sur 14 jours, onglet Aujourd'hui), `python tests/test_sell.py` (module Vente, faux `C_AuctionHouse`) et `python tests/test_watch.py` (surveillance). Tous passent. `tests/harness.lua` simule l'API du jeu (Classic, sauf indication) et 14 jours de marché.
 - Workflow GitHub `.github/workflows/tests.yml` : jamais vu tourner (aucune exécution sur la branche au dernier contrôle). Les Actions sont peut-être désactivées sur le dépôt.
 
@@ -21,7 +21,7 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 | `History.lua` | Historique journalier compact par objet : prix, stock, vendus, ambigus, valeur vendue, expirés ; série 48 h |
 | `Analysis.lua` | Stats par objet : prix réel, vendus/j, tendances, écoulement, net de commission et de dépôt, concurrence, signaux, score. Aussi Flips HV, achat PNJ → HV, artisanat, zones de farm |
 | `Rebound.lua` | Creux de prix et rebonds par objet (taux, délai médian, meilleur jour de la semaine), appris chaque jour et gardés sans purge ; servent aux flips « à stocker » |
-| `Timing.lua` | Meilleur jour / heure pour vendre : enchères vendues réparties en 28 cases (jour × tranche de 6 h) et divisées par le temps observé dans chaque case (corrige le biais « je scanne surtout le dimanche soir »), stockées dans `db.timing` (chaînes compactes, sans purge) ; `Timing.Profile(db, id)` (id nil = tout l'HV) → meilleur jour, tranche, case, gain, fiabilité ; ligne d'infobulle si fiable, section du rapport, `/ahl moment [objet]` |
+| `Timing.lua` | Meilleur jour / heure pour vendre : enchères vendues réparties en 28 cases (jour × tranche de 6 h) et divisées par le temps observé dans chaque case (corrige le biais « je scanne surtout le dimanche soir »), stockées dans `db.timing` (chaînes compactes, format v2, décroissance de demi-vie 5 semaines ; test du χ², seuils z ≥ 3 fiable / z ≥ 2 indicatif) ; `Timing.Profile(db, id)` (id nil = tout l'HV) → meilleur jour, tranche, case, gain, fiabilité ; ligne d'infobulle si fiable, section du rapport, `/ahl moment [objet]` |
 | `Scan.lua` | Scan complet (Auctionator, Retail ou Classic), comparaison avec le scan précédent, carnet d'ordres compact `db.book` |
 | `Trust.lua` | Fiabilité d'un prix : ventes / expirations / annonces qui traînent au prix près (`db.outcomes`, date de 1re apparition `f` dans `lastSigs`), tes courriers ; plafond au plus haut prix vu vendu (`s.capped`), verdict `Trust.Check(s, prix)` → ok / test / bad |
 | `Opportunities.lua` | Onglets « Rentables » (recettes rentables, apprises ou non, avec accès et amorti) et « Sous-coter » (enchère la moins chère au-dessus du prix habituel) |
