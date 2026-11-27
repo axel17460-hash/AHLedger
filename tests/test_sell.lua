@@ -135,6 +135,37 @@ check("plancher : coût d'achat + marge", cost.floor == 464 and cost.floorWhy:fi
 ns.Ledger.DB().ledger = {}
 ns.dataVersion = ns.dataVersion + 1
 
+-- plancher : coût d'opportunité d'un objet farmé. Zone A (1 h) : 10 Alpha (PNJ 100) + 100 Beta (PNJ 10),
+-- 2000/h ; zone B (1 h) : 100 Gamma + 12000 d'or ramassé, 13000/h. Or/h de référence = médiane = 7500.
+-- Temps réparti au prorata quantité × prix PNJ : Alpha 0,5 h → 7500 × 0,5 / 10 = 375/u, plancher 375 / 0,95.
+local T0 = time()
+ns.realmDB().farm = {
+  { zone = "A", start = T0 - 7200, stop = T0 - 3600, money = 0, loot = { [1] = 10, [2] = 100 } },
+  { zone = "B", start = T0 - 3600, stop = T0, money = 12000, loot = { [3] = 100 } },
+}
+ns.dataVersion = ns.dataVersion + 1
+check("farm : or/h de référence = médiane des zones", near(ns.Farm.RefRate(), 7500), ns.Farm.RefRate())
+check("farm : coût/u au prorata quantité × PNJ", near(ns.Farm.UnitCost(1), 375) and near(ns.Farm.UnitCost(2), 37.5) and near(ns.Farm.UnitCost(3), 75), ns.Farm.UnitCost(1))
+check("farm : objet jamais farmé, pas de coût", ns.Farm.UnitCost(4) == nil)
+local fq = q1()
+check("plancher : coût de farm", fq.floor == 395 and fq.floorWhy == "coût de farm", fq.floor .. " " .. tostring(fq.floorWhy))
+Sell.SetRule("item", 1, "farmCost", 0.5)
+check("coût de farm × 0,5 : retombe sous 70 % du prix réel", q1().floor == 350, q1().floor)
+SlashCmdList.AHLEDGER("vendre regle farm 0")
+check("/ahl vendre regle farm 0 : désactivé par défaut", Sell.DB().default.farmCost == false and Sell.Rules(2).farmCost == nil)
+check("… mais la règle objet garde le sien", Sell.Rules(1).farmCost == 0.5)
+Sell.SetRule("item", 1, "farmCost", nil)
+check("farm désactivé : plancher habituel", q1().floor == 350, q1().floor)
+SlashCmdList.AHLEDGER("vendre regle farm off")
+check("farm off : retour au défaut (activé)", Sell.Rules(1).farmCost == 1 and q1().floor == 395, q1().floor)
+-- session en cours : son loot compte aussi
+ns.Farm.current = { start = T0 - 1800, zone = "A", loot = { [4] = 1 }, money0 = GetMoney() }
+check("farm : la session en cours compte", ns.Farm.UnitCost(4) ~= nil and ns.Farm.UnitCost(4) > 0)
+ns.Farm.current = nil
+ns.realmDB().farm = {}
+ns.dataVersion = ns.dataVersion + 1
+check("sans session de farm : plus de coût", q1().floor == 350 and ns.Farm.RefRate() == nil)
+
 ------------------------------------------------------------------------
 -- File de mise en vente
 ------------------------------------------------------------------------
@@ -175,6 +206,27 @@ setAuctions({})
 local qs = Sell.Queue()
 check("pile 3 × 2 : on poste 3 à la fois sur 6 visés", qs[1].id == 1 and qs[1].qty == 3 and qs[1].planned == 6, qs[1].qty .. "/" .. qs[1].planned)
 Sell.SetRule("item", 1, "stackSize", nil); Sell.SetRule("item", 1, "stacks", nil)
+-- banque relue : ses objets entrent dans la file, marqués « banque », triés avec le reste, jamais postés
+ADV[2], ADV[5] = 12, 6
+ns.Prof.Char().bank = { [2] = 3, [5] = 6, [4] = 2 }
+local qb = Sell.Queue()
+local order = {}
+for _, r in ipairs(qb) do order[#order + 1] = r.id .. (r.bank and "b" or "") end
+check("banque : triée par gain avec le reste, bloquées à la fin", table.concat(order, ",") == "1,5b,2,2b,3", table.concat(order, ","))
+check("banque : ne vise que ce que les sacs ne couvrent pas (12 − 10)", qb[4].bank and qb[4].qty == 2 and qb[3].qty == 10, qb[4].qty)
+check("banque : marquée et expliquée", qb[2].where == "banque" and qb[2].action == "Retirer" and qb[2].reason:find("retirer d'abord") ~= nil and not qb[2].blocked, qb[2].reason)
+check("banque : Next ne la propose jamais", Sell.Next(qb).id == 1 and not Sell.Next(qb).bank)
+Sell.Pin(5)
+check("banque : choisie d'un clic, toujours pas postée", Sell.Next(qb).id == 1)
+Sell.Pin(5)
+check("banque : le garde-fou refuse de la poster", select(2, Sell.Guard(qb[2])):find("banque") ~= nil)
+ADV[2] = 5
+local q5 = Sell.Queue()
+local bank2 = false
+for _, r in ipairs(q5) do if r.id == 2 and r.bank then bank2 = true end end
+check("banque : rien si les sacs couvrent la quantité visée", not bank2)
+ns.Prof.Char().bank = nil
+ADV[5] = nil
 
 ------------------------------------------------------------------------
 -- Undercuts
@@ -328,6 +380,7 @@ Sell.DB().cat[7] = nil
 ------------------------------------------------------------------------
 -- Session : ventes encaissées d'après les courriers
 ------------------------------------------------------------------------
+Sell.session.cancels = {} -- les annulations des tests précédents comptent sinon comme dépôts perdus
 local before = Sell.SessionSold()
 check("session : rien d'encaissé au départ", before.units == 0 and before.net == 0)
 local L = ns.Ledger.DB().ledger
@@ -338,6 +391,37 @@ L[#L + 1] = { id = 1, k = "bought", c = 5, g = 700, t = time() + 7 }            
 local ss = Sell.SessionSold()
 check("session : ventes depuis le début seulement", ss.units == 14 and ss.gross == 5800 and ss.cut == 290 and ss.net == 5510, ss.units .. "/" .. ss.gross .. "/" .. ss.net)
 check("session : texte au pied de page", plain(Sell.SessionText()):find("encaissé 14 u., commission 2s 90c, net 55s 10c") ~= nil, plain(Sell.SessionText()))
+-- dépôts perdus : 5 Beta expirées (dépôt 2/u) + une annulation (3 Alpha, dépôt 10/u)
+L[#L + 1] = { id = 2, k = "expired", c = 5, t = time() + 8 }
+Sell.session.cancels[1] = { t = time(), id = 1, qty = 3, dep = 30 }
+local sd = Sell.SalesSummary()
+check("résumé : dépôts perdus (expirés + annulés)", sd.expired == 5 and sd.cancelled == 1 and near(sd.depLost, 40) and near(sd.net, 5470), sd.depLost .. "/" .. sd.net)
+check("résumé : or net par heure", near(sd.perHour, 5470 / (sd.secs / 3600)), sd.perHour)
+check("pied de page : dépôts perdus", plain(Sell.SessionText()):find("dépôts perdus 40c, net 54s 70c") ~= nil, plain(Sell.SessionText()))
+-- annulation depuis l'addon : dépôt perdu noté
+local saveCancel = C_AuctionHouse.CancelAuction
+C_AuctionHouse.CancelAuction = function() end
+setAuctions({ { id = 1, qty = 10, unit = 520, sold = false, left = 30 * 3600, aid = 11 } })
+book(1, LV1)
+Sell.CancelNext()
+local lastC = Sell.session.cancels[#Sell.session.cancels]
+check("annulation : dépôt perdu estimé (10 × 10)", #Sell.session.cancels == 2 and lastC.id == 1 and near(lastC.dep, 100), lastC and lastC.dep)
+table.remove(Sell.session.cancels)
+C_AuctionHouse.CancelAuction = saveCancel
+-- session /ahl farm en cours : ventes depuis son début seulement (la vente de Beta, son expiration)
+ns.Farm.current = { start = time() + 6, zone = "Tanaris", loot = { [2] = 20 }, money0 = GetMoney() }
+local fc = Sell.FarmCompare()
+check("farm : ventes pendant le farm", fc.farmSales and fc.farmSales.units == 4 and near(fc.farmSales.net, 750), fc.farmSales and fc.farmSales.net)
+check("farm : or/h du farm en cours", fc.farm and fc.farm.lootPerHour > 0 and fc.farm.zone == "Tanaris")
+local short, long = Sell.FarmCompareText(fc)
+check("farm : texte court", short:find("ventes de la session : net") and short:find("farm en cours") ~= nil, short)
+check("farm : texte complet", long:find("dépôts perdus") and long:find("Farm en cours %(Tanaris") ~= nil, long)
+SlashCmdList.AHLEDGER("")
+ns.UI.SetMode("farm")
+check("onglet Farm : comparaison au pied de page et dans l'aide", plain(ns.UI.footer.text):find("farm en cours") ~= nil
+  and ns.UI.helpText:find("Session de jeu") ~= nil, plain(ns.UI.footer.text))
+ns.Farm.current = nil
+Sell.session.cancels = {}
 ns.Ledger.DB().ledger = {}
 
 ------------------------------------------------------------------------
@@ -357,6 +441,14 @@ local function rowsText()
   end
   return out
 end
+ns.Prof.Char().bank = { [5] = 6 }
+ADV[5] = 6
+UI.SetMode("sell")
+local bankRow
+for _, r in ipairs(rowsText()) do if r:find("Epsilon") then bankRow = r end end
+check("file : ligne banque affichée « (banque) » et « Retirer »", bankRow and bankRow:find("%(banque%)") and bankRow:find("Retirer") and not bankRow:find("►"), bankRow)
+ns.Prof.Char().bank = nil
+ADV[5] = nil
 UI.SetMode("bags")
 check("Mes objets : bouton de vue vers la file", UI.VIEWS.bags.other == "sell" and UI.sellButton.shown == false)
 UI.SetMode("sell")

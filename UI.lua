@@ -255,13 +255,14 @@ local MODES = {
     sort = "order", -- l'ordre de la file : meilleur gain net d'abord, lignes bloquées à la fin
     asc = true,
     hint = "Clic : choisir comme prochaine mise en vente · Maj-clic : lien",
-    help = "Objets de tes sacs à vendre à l'HV d'après le conseil, au prix de tes règles : palier sain − undercut, entre plancher et plafond (/ahl vendre regles). « Poster suivant » (ou ta touche) = UNE mise en vente : la ligne choisie par un clic, sinon la première, classée par gain net attendu. Gris = le marché est sous ton plancher : rien n'est posté.",
+    help = "Objets de tes sacs à vendre à l'HV d'après le conseil, au prix de tes règles : palier sain − undercut, entre plancher et plafond (/ahl vendre regles). « Poster suivant » (ou ta touche) = UNE mise en vente : la ligne choisie par un clic, sinon la première, classée par gain net attendu. Gris = le marché est sous ton plancher : rien n'est posté. « (banque) » = en banque (relue à ta dernière visite) : à retirer d'abord, jamais posté d'ici.",
     footer = function() return ns.Sell.SessionText() end,
     cols = {
       { "Objet", 150, function(e)
           local name = itemLabel(e.id, e.s)
-          if e.blocked then name = "|cff808080" .. ns.Sell.plain(name) .. "|r" end
-          return (ns.Sell.pinned == e.id and "|cff40ff40►|r " or "") .. name
+          if e.blocked or e.bank then name = "|cff808080" .. ns.Sell.plain(name) .. "|r" end
+          if e.bank then name = name .. " |cff66ccff(banque)|r" end
+          return (ns.Sell.pinned == e.id and not e.bank and "|cff40ff40►|r " or "") .. name
         end, "name" },
       { "Qté", 38, function(e) return tostring(e.qty) end, "qty", "RIGHT" },
       { "Prix/u", 78, function(e) return e.price and ns.money(e.price) or "|cff808080—|r" end, "price", "RIGHT" },
@@ -269,7 +270,10 @@ local MODES = {
       { "Plancher/u", 78, function(e) return ns.money(e.floor) end, "floor", "RIGHT" },
       { "Durée", 40, function(e) return e.duration .. " h" end, "duration", "RIGHT" },
       { "Gain net", 80, function(e) return (e.blocked and "|cff808080" or "|cff40ff40") .. ns.money(e.net) .. "|r" end, "net", "RIGHT" },
-      { "Action", 62, function(e) return e.blocked and ("|cffff8040" .. e.action .. "|r") or "|cff40ff40Poster|r" end, "action" },
+      { "Action", 62, function(e)
+          if e.blocked then return "|cffff8040" .. e.action .. "|r" end
+          return e.bank and "|cff66ccffRetirer|r" or "|cff40ff40Poster|r"
+        end, "action" },
       { "Pourquoi", 140, function(e) return e.reason or "" end, "reason" },
     },
     rows = function() return ns.Sell.Queue() end,
@@ -388,7 +392,12 @@ local MODES = {
   farm = {
     title = "Farm",
     sort = "total",
-    help = "Tes sessions /ahl farm, valorisées aux prix actuels. Au-delà du volume que le marché absorbe, le loot est compté au prix PNJ.",
+    -- farmer ou acheter : l'or/h du farm à côté de l'or réellement encaissé à l'HV (Sell.FarmCompare)
+    help = function()
+      local _, long = ns.Sell.FarmCompareText()
+      return long .. " — Tes sessions /ahl farm, valorisées aux prix actuels. Au-delà du volume que le marché absorbe, le loot est compté au prix PNJ."
+    end,
+    footer = function() return (ns.Sell.FarmCompareText()) end,
     cols = {
       { "Zone", 170, function(e) return e.zone end, "zone" },
       { "Heures", 55, function(e) return ("%.1f"):format(e.hours) end, "hours", "RIGHT" },
