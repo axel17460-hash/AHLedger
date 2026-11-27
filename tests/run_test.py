@@ -1617,7 +1617,7 @@ today = lua.eval("""function(ns)
   local p0 = T.Plan(30, 0)
   r.noGold = true
   for _, a in ipairs(p0) do if a.gold > 0 then r.noGold = false end end
-  -- tri : score (gain × fiabilité ÷ minutes) décroissant, rang = ordre du plan
+  -- tri : score (gain × fiabilité ÷ (minutes/T + or/G)) décroissant, rang = ordre du plan
   r.sorted = true
   for i, a in ipairs(plan) do
     if a.order ~= i or (i > 1 and a.score > plan[i - 1].score + 1e-9) then r.sorted = false end
@@ -1678,3 +1678,129 @@ assert "Plan de séance (30 min)" in strip(today.cmd), strip(today.cmd)
 assert today.uiRows == today.n or today.uiRows >= 3, today.uiRows
 assert "action" in strip(today.footer) and today.btn30 and today.btnHidden and today.report
 print("OK : Aujourd'hui (plan non vide, or et temps respectés, tri par gain/min, conseils non fiables écartés, onglet, commande, rapport)")
+# Aujourd'hui : gain homogène, une action par objet, vente PNJ jamais écartée, repost non repondéré, l'or compte
+today2 = lua.eval("""function(ns)
+  local T, A = ns.Today, ns.Analysis
+  local c = ns.Prof.Char()
+  local savedBags, savedF, savedTS, savedU, savedOpp = c.bags, A.Flips, ns.Track.Summary, ns.Sell.Undercuts, ns.Opp.Undercuts
+  AHLedgerDB.items[90100] = { n = "Ferraille", s = 500 }   -- pas de marché HV : conseil « PNJ »
+  c.bags = { [4306] = 60, [2589] = 80, [929] = 6, [2592] = 30, [90100] = 4 }
+  ns.dataVersion = ns.dataVersion + 1
+  ns.Track.Summary = function() return {} end
+  local r = {}
+  local function fakeS(id, maxSold, n)
+    return { id = id, name = "Faux" .. id, price = 1000, perDay = 5,
+             ev = { list = { { maxSold, n or 10, "s", n or 10 } }, maxSold = maxSold, soldUnits = n or 10 } }
+  end
+  local function ids(plan)
+    local seen, ok = {}, true
+    for _, a in ipairs(plan) do
+      if a.id then if seen[a.id] then ok = false end; seen[a.id] = true end
+    end
+    return ok
+  end
+  -- 1. gain d'une vente : p × net − (1 − p) × dépôt − PNJ ; p selon vendus/j et durée, « à tester » : p × 0,5
+  local s1 = { perDay = 10 }
+  r.p24, r.p12 = T.SellProb(s1, 10, 24, 0), T.SellProb(s1, 10, 12, 0)
+  r.pAhead = T.SellProb(s1, 10, 24, 10)
+  local g1, p1 = T.SaleGain(90100, s1, 10, 1000, 24, 0, "ok")
+  local g2, p2, dep2 = T.SaleGain(90100, s1, 10, 1000, 12, 0, "test")
+  local net = 1000 * (1 - A.AH_CUT)
+  r.g1ok, r.p1, r.p2 = math.abs(g1 - 10 * (net - 500)) < 1e-6, p1, p2
+  r.g2ok = dep2 > 0 and math.abs(g2 - 10 * (0.25 * net - 0.75 * dep2 - 500)) < 1e-6
+  -- 2. une seule action par objet : un flip sur un objet de la file de vente ne s'ajoute pas à la vente
+  A.Flips = function()
+    return { { kind = "now", id = 2589, s = fakeS(2589, 5000), qty = 10, cost = 100, maxBuy = 10, resale = 99,
+               profit = 50000, roi = 5, days = 1 } }
+  end
+  local cands = T.Candidates(60, 10000000)
+  local nSell, nFlip = 0, 0
+  for _, a in ipairs(cands) do
+    if a.id == 2589 and a.kind == "sell" then nSell = nSell + 1 end
+    if a.id == 2589 and a.kind == "flip" then nFlip = nFlip + 1 end
+  end
+  r.bothCands = nSell == 1 and nFlip == 1
+  local pd, sd = T.Plan(60, 10000000)
+  local n2589 = 0
+  for _, a in ipairs(pd) do if a.id == 2589 then n2589 = n2589 + 1 end end
+  r.oneId, r.dup = n2589 == 1, sd.dup
+  r.unique = true
+  for _, m in ipairs({ 15, 30, 60, 120 }) do
+    for _, gold in ipairs({ 0, 500, 5000, 10000000 }) do
+      local p, s = T.Plan(m, gold)
+      if not ids(p) then r.unique = false end
+      local tm, tg = 0, 0
+      for _, a in ipairs(p) do tm, tg = tm + a.minutes, tg + a.gold end
+      if tm > m + 1e-6 or tg > gold then r.unique = false end
+    end
+  end
+  A.Flips = savedF
+  -- objet des sacs conseillé « PNJ » ou « Fabriquer » : jamais proposé à l'HV (Sous-coter)
+  local adv = {}
+  for _, e in ipairs(ns.Bags.Advice()) do adv[e.id] = e.action end
+  r.advNPC, r.advCraft = adv[90100], adv[4306]
+  ns.Opp.Undercuts = function()
+    return { { id = 90100, s = fakeS(90100, 5000), have = 4, qty = 4, post = 900, premium = 0.3, notes = "" },
+             { id = 4306, s = fakeS(4306, 5000), have = 60, qty = 10, post = 900, premium = 0.3, notes = "" } }
+  end
+  r.noPremium = true
+  for _, a in ipairs(T.Candidates(60, 10000000)) do if a.kind == "premium" then r.noPremium = false end end
+  ns.Opp.Undercuts = savedOpp
+  -- 3. vente au PNJ : jamais écartée, même si Track juge mal « Sacs : vendre au PNJ »
+  ns.Track.Summary = function() return { { key = "bagNPC", label = "Sacs : vendre au PNJ", checked = 20, rate = 0.05 } } end
+  local pn = T.Plan(60, 10000000)
+  for _, a in ipairs(pn) do if a.kind == "npc" then r.npcIn, r.npcTrust = true, a.trust end end
+  ns.Track.Summary = function() return {} end
+  -- 4. repost « à tester » : gain déjà pondéré par les chances de vendre, pas remultiplié par 0,5
+  ns.Sell.Undercuts = function()
+    return { { id = 90200, s = fakeS(90200, 1000, 1), worth = true, gain = 5000, newPrice = 1000, n = 1, qty = 2, gap = 0.1 } }
+  end
+  for _, a in ipairs(T.Candidates(60, 10000000)) do
+    if a.kind == "repost" then
+      r.rpTrust, r.rpW, r.rpGain = a.trust, a.weight, a.gain
+      r.rpScore = math.abs(a.score - 5000 / (T.REPOST_MIN / 60 + a.gold / 10000000)) < 1e-6
+    end
+  end
+  ns.Sell.Undercuts = savedU
+  -- 5. peu d'or : un flip qui bloque presque tout l'or passe derrière un flip peu coûteux de meilleur rendement
+  A.Flips = function()
+    return { { kind = "now", id = 90011, s = fakeS(90011, 5000), qty = 10, cost = 9500, maxBuy = 950, resale = 1000,
+               profit = 20000, roi = 2.1, days = 1 },
+             { kind = "now", id = 90012, s = fakeS(90012, 5000), qty = 10, cost = 10, maxBuy = 1, resale = 1000,
+               profit = 3000, roi = 300, days = 1 } }
+  end
+  local function orders(gold)
+    local oa, ob
+    for _, a in ipairs((T.Plan(60, gold))) do
+      if a.id == 90011 then oa = a.order end
+      if a.id == 90012 then ob = a.order end
+    end
+    return oa, ob
+  end
+  local oaPoor, obPoor = orders(10000)
+  local oaRich, obRich = orders(10000000)
+  r.poorOk = obPoor ~= nil and (oaPoor == nil or obPoor < oaPoor)
+  r.richOk = oaRich ~= nil and obRich ~= nil and oaRich < obRich
+  -- 5 bis : dépôt dans l'or immobilisé (flip) et temps de mise en vente (achat PNJ, artisanat vendu à l'HV)
+  r.postTime = true
+  for _, a in ipairs(T.Candidates(60, 10000000)) do
+    if a.kind == "vendor" and a.minutes < T.VENDOR_TRAVEL_MIN + T.POST_MIN - 1e-9 then r.postTime = false end
+    if a.kind == "craft" and a.group == "craft" and a.minutes < T.CRAFT_SETUP_MIN + T.POST_MIN - 1e-9 then r.postTime = false end
+  end
+  A.Flips, ns.Track.Summary = savedF, savedTS
+  c.bags = savedBags
+  AHLedgerDB.items[90100] = nil
+  ns.dataVersion = ns.dataVersion + 1
+  return r
+end""")(ns)
+print("Aujourd'hui (classement) :", dict(today2))
+assert abs(today2.p24 - 1) < 1e-9 and abs(today2.p12 - 0.5) < 1e-9 and abs(today2.pAhead - 0.5) < 1e-9, dict(today2)
+assert today2.g1ok and today2.p1 == 1 and abs(today2.p2 - 0.25) < 1e-9 and today2.g2ok, dict(today2)
+assert today2.bothCands and today2.oneId and today2.dup >= 1, "même objet compté deux fois dans le plan"
+assert today2.unique, "un plan contient deux actions pour le même objet, ou dépasse le temps ou l'or"
+assert today2.advNPC == "PNJ" and today2.advCraft == "Fabriquer" and today2.noPremium, (today2.advNPC, today2.advCraft, today2.noPremium)
+assert today2.npcIn and today2.npcTrust == "ok", "vente au PNJ écartée"
+assert today2.rpTrust == "test" and today2.rpW == 1 and today2.rpGain == 5000 and today2.rpScore, "repost pondéré deux fois"
+assert today2.poorOk and today2.richOk, "l'or disponible ne change pas le classement"
+assert today2.postTime, "temps de mise en vente oublié pour un achat PNJ ou un craft revendu à l'HV"
+print("OK : Aujourd'hui (gain incrémental, une action par objet, vente PNJ jamais écartée, repost non repondéré, score temps + or)")
