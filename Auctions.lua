@@ -20,6 +20,7 @@ local function store(list)
   for _, a in ipairs(list) do ns.rememberItem(a.id) end
   ns.dataVersion = (ns.dataVersion or 0) + 1
   if ns.UI then ns.UI.OnData() end
+  if ns.Sell then ns.safe("résumé vente", ns.Sell.OnAuctions) end
 end
 
 -- API moderne (Forever, Retail). Le prix de rachat d'une enchère en cours est celui d'UNE unité ;
@@ -39,7 +40,8 @@ function Auctions.ReadModern()
         if unit and unit <= 0 then unit = nil end
         if unit and sold then unit = unit / qty end
         list[#list + 1] = { id = id, qty = qty, unit = unit, bid = tonumber(r.bidAmount) or 0, sold = sold,
-                            left = not sold and tonumber(r.timeLeftSeconds) or nil }
+                            left = not sold and tonumber(r.timeLeftSeconds) or nil,
+                            aid = tonumber(r.auctionID) } -- numéro d'enchère : sert à l'annuler (Sell.CancelNext)
       end
     end
   end

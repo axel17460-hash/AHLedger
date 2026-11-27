@@ -30,6 +30,7 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 | `Ledger.lua` | Bilan réel lu dans les courriers d'HV ; calibre `AH_CUT` et `DEPOSIT_RATE` dès 5 ventes |
 | `Track.lua` | Fiabilité des conseils : note les flips / achats PNJ conseillés à chaque scan (`db.track`), les vérifie sur les scans suivants (prix tenu, écoulé) et les rapproche de tes achats réels ; vue « fiabilité » de l'onglet Bilan, `/ahl fiabilite` |
 | `RecipeDB.lua` | Fournisseurs de recettes (`RecipeDB.Register`) et planificateur de montée (`/ahl monter cuir 225`) |
+| `Sell.lua` | Module Vente (v0.9) : règles de prix par défaut / catégorie / objet (`AHLedgerDB.sell`), prix proposé (`Sell.Quote` : carnet sans tes enchères, anti-troll, plancher, plafond, undercut, durée), file de mise en vente (`Sell.Queue`, une ligne = un clic), enchères battues et gain de repost (`Sell.Undercuts`), résumé à l'ouverture de l'HV, `Sell.Post` / `Sell.CancelNext` (API `C_AuctionHouse`, un clic ou une touche = une action), `/ahl vendre …`. L'interface est dans `UI.lua` : vues « file de vente » et « undercuts » de l'onglet Mes objets. Raccourcis : `Bindings.xml` |
 | `Export.lua` | Rapport texte pour Claude (`/ahl claude`), aussi sauvé dans `AHLedgerDB.brief` |
 | `Diag.lua` | `/ahl diag` : API présentes, variante utilisée, événements refusés, erreurs |
 | `Bridge.lua`, `Tooltip.lua`, `UI.lua` | Auctionator, tooltips, fenêtre à 10 onglets (aussi en onglet de l'HV via LibAHTab) |
@@ -41,6 +42,16 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 - Commission HV (5 % supposés) et dépôt (15 % du prix PNJ supposés) : calibrés automatiquement par `Ledger.lua` après 5 ventes.
 - Seuils de dépeçage par cuir (`Professions.lua`, `Prof.SKINNING`) : approximatifs.
 - Fenêtre de copie de `/ahl claude` (EditBox multiligne) : jamais affichée en vrai.
+
+## Module Vente : à vérifier en jeu (rien n'y a été testé, l'API est simulée dans `tests/test_sell.py`)
+1. `PostCommodity` / `PostItem` / `CancelAuction` : un clic ou une touche suffit-il (événement matériel) ? Le bouton « Poster suivant » et la touche de `Bindings.xml` doivent chacun poster une enchère. Si une erreur d'action bloquée apparaît, regarde `/ahl diag` et le message de `Sell.Post`.
+2. `PostCommodity(loc, durée, quantité, prix/u)` : durée 1/2/3 = 12/24/48 h ; `PostItem(loc, durée, 1, nil, rachat)` pour les objets uniques (équipement). La quantité postée est plafonnée par `GetAvailablePostCount` s'il existe. Vérifie le prix et la durée réellement affichés dans « Mes enchères ».
+3. Annuler : où revient l'objet (sacs ou courrier) ? Le dépôt est-il perdu (le calcul du repost le suppose) ?
+4. `Analysis.AH_CUT` (5 %) et plafond d'enchères actives par compte (non géré : à ajouter dans `Sell.Plan` s'il existe).
+5. Le numéro d'enchère (`auctionID` de `GetOwnedAuctionInfo`) est stocké dans `Auctions` (champ `aid`) : sans lui, « Annuler suivante » ne fait rien. Rouvre l'HV pour relire tes enchères après une mise à jour de l'addon.
+6. L'interface n'a pas été vue : colonnes, grisé des lignes bloquées, bouton « Poster suivant » (largeur 120 px), pied de page de la file.
+7. Le carnet vient du dernier scan : une enchère postée après lui n'est pas retirée du carnet (`Sell.WithoutMine` n'enlève que ce qu'il y retrouve). Rescanne après une série de mises en vente.
+Pas encore fait (dans le design `conception-vente.md`) : résumé de session (vendu, commission) dans l'onglet Farm ; coût de farm connu dans le plancher (seuls tes achats comptent) ; pas de file pour la banque.
 
 ## Prochaines étapes, dans l'ordre
 1. **Premier test en jeu.** Installe ou mets à jour l'addon, `/reload`, puis `/ahl diag`. Corrige chaque ligne MANQUE et chaque erreur. Avec une session locale, lis directement :

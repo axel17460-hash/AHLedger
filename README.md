@@ -1,4 +1,4 @@
-# AHLedger (v0.8.2)
+# AHLedger (v0.9.0)
 
 Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l'hôtel des ventes et suit les hausses et baisses de prix, pour savoir quoi farmer avant tout le monde. L'analyse se fait entièrement en jeu.
 
@@ -25,6 +25,9 @@ Addon pour WoW: Forever. Il repère les objets les plus rentables à vendre à l
     - **PNJ** : le marchand paie plus que l'HV, net des frais.
     - **Attendre** : quelqu'un brade sous 85 % du prix habituel.
     - Un objet qui se vend moins d'une fois tous les 2 jours n'est jamais conseillé à l'HV, car chaque expiration coûte le dépôt. Il va au PNJ si le marchand paie au moins la moitié du net HV, sinon il est à garder (ou à tester en 1 seul exemplaire).
+    - **Vue : file de vente** (bouton en haut à droite de l'onglet Mes objets) : les objets de tes **sacs** que le conseil dit de vendre à l'HV, avec le prix calculé par tes règles, classés par gain net attendu par clic. **Poster suivant** (bouton, ou la touche choisie dans Options > Raccourcis > AHLedger) met en vente **une** ligne : celle que tu as choisie d'un clic (►), sinon la première. Une ligne grisée a un marché sous ton plancher : rien n'est posté, et la règle « sous le plancher » dit quoi en faire (garder, PNJ, attendre). Ce qui est déjà en vente compte dans la quantité visée, pour ne pas inonder le marché.
+    - **Vue : undercuts** : tes enchères battues (d'après le dernier scan, sans compter les tiennes), le prix conseillé pour les reposter et le gain attendu. **Annuler suivante** annule **une** enchère qui vaut le coup ; l'objet revient (courrier ou sacs : à vérifier en jeu), puis la file de vente le reposte au nouveau prix.
+    - **Résumé** à l'ouverture de l'HV et à la connexion : « 2 à reposter, 1 vendue, 1 sous plancher, repasser dans ~3 h ».
   - **Bilan** : tes ventes, achats et expirations des 30 derniers jours, lus dans tes courriers d'HV (il suffit d'ouvrir la boîte aux lettres). Pour chaque objet : solde, prix moyen obtenu et écart avec le prix prévu par l'addon. Dès 5 ventes, la commission et le dépôt réels de Forever sont mesurés sur tes factures et remplacent les valeurs supposées dans tous les calculs. `/ahl bilan` résume le tout dans le chat.
     - **Vue : fiabilité des conseils** (bouton en haut à droite de l'onglet Bilan) : chaque conseil (Flip HV tout de suite, à stocker, à tester ; Achat PNJ → HV ; artisanat à revendre à l'HV ; sacs « Vendre HV » et « PNJ ») est noté au scan où il apparaît, puis vérifié sur les scans suivants pendant 3 jours (à stocker : jusqu'au rebond, 14 jours au plus). **Prix tenu** : le prix de revente annoncé était atteignable (enchère la moins chère restante, hors unités que le conseil t'aurait fait acheter). **Écoulé** : le marché a acheté au moins ta quantité à ce prix ou plus (estimé à partir des enchères disparues ; les relistes repérés sont écartés). **Réussi** = les deux. Pour un conseil des sacs « PNJ », réussi = l'HV n'a pas clairement mieux payé que le marchand ; sinon « Constaté » montre l'or manqué. « Garder », « Attendre » et « Fabriquer » ne sont pas vérifiés. Bénéfice constaté = quantité × prix tenu net − coût, à comparer au bénéfice prévu. **Suivis** : tu as acheté l'objet dans les 24 h (courriers d'HV), avec le gain réel de tes reventes. `/ahl fiabilite` l'affiche dans le chat, et le rapport pour Claude le contient. Au bout d'une ou deux semaines, fie-toi aux types de conseil qui réussissent souvent.
   - **Achat PNJ** : objets achetés chez des marchands que tu as déjà ouverts et revendables à profit (commission déduite).
@@ -62,6 +65,20 @@ Un addon ne peut pas communiquer avec l'extérieur. AHLedger prépare donc un ra
 3. Lance `tools/sync_drive.bat` et laisse la fenêtre ouverte pendant que tu joues. Pour qu'il démarre tout seul, mets-en un raccourci dans le dossier Démarrage (`Win+R` puis `shell:startup`). Il trouve tout seul le fichier de l'addon et le dossier Drive ; sinon, ajoute `--sv "<...>\AHLedger.lua"` et/ou `--to "G:\Mon Drive\AHLedger"`.
 4. En jeu : un scan, puis `/reload` (ou déconnexion). Le jeu n'écrit ses fichiers qu'à ce moment-là. Le script copie alors le rapport dans `Mon Drive/AHLedger/rapport.md`, et garde les 30 derniers dans `historique/`.
 5. Dans Claude : « regarde mon HV ». Claude lit `rapport.md` dans ton Drive.
+
+## Module Vente : comment le prix est choisi
+Pour un objet, avec le carnet du dernier scan **sans tes propres enchères** :
+1. **Plancher/u** = le plus grand de : rachat PNJ + 10 % (commission déduite), ton coût d'achat moyen (courriers d'HV) + 10 %, 70 % du prix réel de vente, et un plancher fixé à la main.
+2. **Anti-troll** : les enchères sous le plancher dont la quantité cumulée pèse moins de 10 % du stock ne fixent pas le prix. On vise le premier palier « sain » ; l'addon signale que les racheter (coût indiqué) relèverait le marché, mais n'achète jamais seul. Au-delà de 10 %, c'est le marché qui est bas : ligne grisée.
+3. **Prix** = palier visé − undercut (1 pc par défaut, ou un %), sans dépasser 1,2 × le prix réel de vente (plafond : pas de mise en vente sur un pic).
+4. **Signaux** : pénurie → undercut minimal, plafond relevé, 48 h ; afflux → undercut doublé, 12 h.
+5. **Durée** automatique : le marché écoule au moins son stock en un jour → 12 h (on reposte souvent, dépôt faible), sinon 48 h.
+6. **Quantité** : celle du conseil des sacs (environ un jour de ventes) moins ce qui est déjà en vente, ou taille × nombre de piles si tu les fixes.
+7. **Repost d'une enchère battue** : gain attendu = ventes attendues nettes de commission − dépôts perdus, avant et après repost (annuler perd le dépôt ; le nouveau est perdu si ça expire). Proposé seulement au-dessus de 1 pa. La chance de vendre dans la durée restante vient de (unités moins chères devant toi + les tiennes) ÷ vendus/jour.
+
+**Règles** : trois niveaux, le plus précis gagne (défaut → catégorie → objet). `/ahl vendre regles` les affiche ; `/ahl vendre regle [objet <lien ou id> | cat <classID>] <clé> <valeur>` les change (`off` retire la règle). Clés : `undercut` (`1c`, `2%`), `plancher` (`70%`), `marge` (PNJ), `profit` (coût d'achat), `plafond` (`1.2`), `pile` (unités par mise en vente), `piles` (nombre voulu, seulement avec `pile`), `duree` (`12`, `24`, `48`), `sous` (`garder`, `pnj`, `attendre`), `fixe` (`5g`).
+
+**Garde-fous** : AHLedger ne poste jamais sous le plancher, sous le rachat PNJ net de commission, ni à plus de 3 fois le prix réel. Chaque mise en vente et chaque annulation demande un clic ou une touche de ta part (règle Blizzard : pas de « tout poster »). Seule l'API `C_AuctionHouse` (celle de Forever) est gérée pour poster.
 
 ## Comment c'est calculé
 - **Prix** : le prix réel de vente, c'est-à-dire le prix des enchères disparues comme vendues, dès qu'au moins 5 unités ont été vues partir sur 7 jours. Avant ça, la médiane des prix affichés.
@@ -114,7 +131,7 @@ python tools/ahledger.py brief ".../SavedVariables/AHLedger.lua" --out rapport.m
 `/ahl diag` vérifie, module par module, quelles fonctions du jeu sont présentes sur ton client et quelle variante (Classic ou Retail) l'addon utilise. Il affiche aussi les événements que le client refuse, les erreurs survenues depuis la connexion et ce qui a déjà été collecté. Le diagnostic est aussi ajouté au rapport pour Claude.
 
 ## Tests hors jeu
-`pip install lupa luaparser`, puis `python tests/check_globals.py` (variables globales : fautes de frappe, `local` oublié) et `python tests/run_test.py`. GitHub les lance à chaque push (`.github/workflows/tests.yml`), avec en plus `luacheck`, pour l'instant à titre indicatif. Le test simule 14 jours de marché, 6 scans par soir, et vérifie que la hausse, la baisse, la pénurie et l'afflux sont bien détectés.
+`pip install lupa luaparser`, puis `python tests/check_globals.py` (variables globales : fautes de frappe, `local` oublié) `python tests/run_test.py` (marché simulé sur 14 jours) et `python tests/test_sell.py` (module Vente, avec un faux `C_AuctionHouse` qui note les appels). GitHub les lance à chaque push (`.github/workflows/tests.yml`), avec en plus `luacheck`, pour l'instant à titre indicatif. Le test simule 14 jours de marché, 6 scans par soir, et vérifie que la hausse, la baisse, la pénurie et l'afflux sont bien détectés.
 
 ## Notes Forever (vérifiées en jeu le 22/11/2026)
 - Forever n'a **pas** l'API d'HV Classic (`QueryAuctionItems` absent) : il utilise l'API Retail `C_AuctionHouse` (scan complet par `ReplicateItems`).

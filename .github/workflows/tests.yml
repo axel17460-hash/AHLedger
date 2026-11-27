@@ -18,6 +18,8 @@ jobs:
         run: python tests/check_globals.py
       - name: Simulation du marché et de l'interface
         run: python tests/run_test.py
+      - name: Module Vente (prix, file, undercuts, mise en vente)
+        run: python tests/test_sell.py
   luacheck:
     # informatif tant que les règles n'ont pas été ajustées sur un premier passage
     runs-on: ubuntu-latest

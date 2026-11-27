@@ -36,6 +36,8 @@ local EMPTY = {
   farm = "Aucune session de farm : tape /ahl farm start avant de farmer, puis /ahl farm stop.",
   recipes = "Aucune recette rentable trouvée. Ouvre tes fenêtres de métier, ou installe OneForAll pour voir aussi les recettes que tu n'as pas.",
   undercut = "Aucun marché où l'enchère la moins chère dépasse nettement le prix habituel. Rescanne plus tard.",
+  sell = "Rien à poster : aucun objet de tes sacs n'est à vendre à l'HV d'après le conseil (onglet « Mes objets »), ou tout est déjà en vente. Ouvre tes sacs pour les relire.",
+  repost = "Aucune de tes enchères n'est battue d'après le dernier scan. Ouvre l'HV pour relire tes enchères, puis rescanne.",
 }
 -- Onglets à deux vues : bouton « Vue : … » qui bascule vers l'autre
 UI.VIEWS = {
@@ -43,11 +45,15 @@ UI.VIEWS = {
   level = { other = "craft", label = "Vue : rentabilité" },
   ledger = { other = "track", label = "Vue : fiabilité des conseils" },
   track = { other = "ledger", label = "Vue : mes ventes" },
+  -- Mes objets > file de vente > undercuts > Mes objets
+  bags = { other = "sell", label = "Vue : file de vente" },
+  sell = { other = "repost", label = "Vue : undercuts" },
+  repost = { other = "bags", label = "Vue : mes objets" },
 }
-UI.PARENT = { level = "craft", track = "ledger" }
+UI.PARENT = { level = "craft", track = "ledger", sell = "bags", repost = "bags" }
 local NO_SCAN = "Pas encore de scan sur ce royaume : ouvre l'HV et clique « Scanner l'HV »."
 local NEEDS_SCAN = { market = true, flip = true, snipe = true, vendor = true, craft = true, level = true, recipes = true,
-                     undercut = true }
+                     undercut = true, sell = true, repost = true }
 
 -- « +45 % » coloré comme les pastilles des sacs : vert mieux à l'HV, jaune pareil, rouge au PNJ
 function UI.CompareCell(c)
@@ -242,6 +248,56 @@ local MODES = {
       end
       return out
     end,
+  },
+  sell = {
+    title = "File de vente",
+    tab = false, -- vue de l'onglet Mes objets
+    sort = "order", -- l'ordre de la file : meilleur gain net d'abord, lignes bloquées à la fin
+    asc = true,
+    hint = "Clic : choisir comme prochaine mise en vente · Maj-clic : lien",
+    help = "Objets de tes sacs à vendre à l'HV d'après le conseil, au prix de tes règles : palier sain − undercut, entre plancher et plafond (/ahl vendre regles). « Poster suivant » (ou ta touche) = UNE mise en vente : la ligne choisie par un clic, sinon la première, classée par gain net attendu. Gris = le marché est sous ton plancher : rien n'est posté.",
+    footer = function() return ns.Sell.SessionText() end,
+    cols = {
+      { "Objet", 150, function(e)
+          local name = itemLabel(e.id, e.s)
+          if e.blocked then name = "|cff808080" .. ns.Sell.plain(name) .. "|r" end
+          return (ns.Sell.pinned == e.id and "|cff40ff40►|r " or "") .. name
+        end, "name" },
+      { "Qté", 38, function(e) return tostring(e.qty) end, "qty", "RIGHT" },
+      { "Prix/u", 78, function(e) return e.price and ns.money(e.price) or "|cff808080—|r" end, "price", "RIGHT" },
+      { "Palier/u", 78, function(e) return ns.money(e.tier) end, "tier", "RIGHT" },
+      { "Plancher/u", 78, function(e) return ns.money(e.floor) end, "floor", "RIGHT" },
+      { "Durée", 40, function(e) return e.duration .. " h" end, "duration", "RIGHT" },
+      { "Gain net", 80, function(e) return (e.blocked and "|cff808080" or "|cff40ff40") .. ns.money(e.net) .. "|r" end, "net", "RIGHT" },
+      { "Action", 62, function(e) return e.blocked and ("|cffff8040" .. e.action .. "|r") or "|cff40ff40Poster|r" end, "action" },
+      { "Pourquoi", 140, function(e) return e.reason or "" end, "reason" },
+    },
+    rows = function() return ns.Sell.Queue() end,
+    onClick = function(e) ns.Sell.Pin(e.id); UI.Refresh() end,
+  },
+  repost = {
+    title = "Undercuts",
+    tab = false, -- vue de l'onglet Mes objets
+    sort = "gain",
+    help = "Tes enchères battues (d'après le dernier scan, sans compter les tiennes) : nouveau prix conseillé, et gain attendu à annuler puis reposter (ventes attendues nettes de commission − dépôts perdus). « Annuler suivante » annule UNE enchère qui vaut le coup ; l'objet revient dans tes sacs ou par courrier, puis la file de vente le reposte au nouveau prix.",
+    footer = function() return ns.Sell.SessionText() end,
+    cols = {
+      { "Objet", 150, function(e) return itemLabel(e.id, e.s) .. (e.n > 1 and (" ×" .. e.n) or "") end, "name" },
+      { "Qté", 38, function(e) return tostring(e.qty) end, "qty", "RIGHT" },
+      { "Ton prix/u", 78, function(e) return ns.money(e.unit) end, "unit", "RIGHT" },
+      { "Moins cher/u", 78, function(e) return ns.money(e.low) end, "low", "RIGHT" },
+      { "Écart", 50, function(e) return ("|cffff5050+%.0f%%|r"):format(e.gap * 100) end, "gap", "RIGHT" },
+      { "Nouveau/u", 78, function(e) return e.newPrice and ns.money(e.newPrice) or "|cff808080—|r" end, "newPrice", "RIGHT" },
+      { "Gain attendu", 80, function(e)
+          if not e.gain then return "|cff808080—|r" end
+          return (e.worth and "|cff40ff40" or "|cff808080") .. ns.money(e.gain) .. "|r"
+        end, "gain", "RIGHT" },
+      { "Reste", 50, function(e) return ns.Auctions.LeftText(e.left) end, "left", "RIGHT" },
+      { "Statut", 130, function(e)
+          return (e.worth and "|cff40ff40" or "|cffff8040") .. e.status .. "|r"
+        end, "status" },
+    },
+    rows = function() return ns.Sell.Undercuts() end,
   },
   ledger = {
     title = "Bilan",
@@ -519,7 +575,9 @@ function UI.Build()
           GameTooltip:AddLine(col[1] .. " : |cffffffff" .. (fs:GetText() or "") .. "|r", 1, 0.82, 0, true)
         end
       end
-      if id and ns.isAHOpen() then GameTooltip:AddLine("Clic : afficher à l'achat dans l'HV · Maj-clic : lien", 0.5, 0.8, 1) end
+      if id and (ns.isAHOpen() or MODES[UI.mode].hint) then
+        GameTooltip:AddLine(MODES[UI.mode].hint or "Clic : afficher à l'achat dans l'HV · Maj-clic : lien", 0.5, 0.8, 1)
+      end
       local n = GameTooltip:NumLines()
       if id or (type(n) == "number" and n > 0) then GameTooltip:Show() else GameTooltip:Hide() end
     end)
@@ -565,6 +623,17 @@ function UI.Build()
   local optBtn = Look.Button(f, "Options", 70, 22)
   optBtn:SetPoint("RIGHT", claudeBtn, "LEFT", -6, 0)
   optBtn:SetScript("OnClick", function() ns.safe("options", ns.Options.Toggle) end)
+  UI.optButton = optBtn
+
+  -- Un clic = une mise en vente (ou une annulation) : jamais « tout poster » (règles Blizzard)
+  local sellBtn = Look.Button(f, "Poster suivant", 120, 22)
+  sellBtn:SetPoint("RIGHT", optBtn, "LEFT", -6, 0)
+  sellBtn:SetScript("OnClick", function()
+    if UI.mode == "repost" then ns.safe("annuler suivante", ns.Sell.CancelNext) else ns.safe("poster suivant", ns.Sell.PostNext) end
+    UI.Refresh()
+  end)
+  sellBtn:Hide()
+  UI.sellButton = sellBtn
 
   -- le pied de page s'arrête avant les boutons (il passait dessous quand le texte était long)
   UI.footer = Look.Text(f, "small", "LABEL", "GameFontDisableSmall")
@@ -611,6 +680,17 @@ function UI.SetMode(mode)
   end
   local isMarket = mode == "market"
   if isMarket then UI.catButton:Show(); UI.liqButton:Show() else UI.catButton:Hide(); UI.liqButton:Hide() end
+  -- boutons de vente : seulement dans la file de vente et les undercuts ; le pied de page s'arrête avant
+  local isSell = mode == "sell" or mode == "repost"
+  if isSell then
+    UI.sellButton:SetText(mode == "repost" and "Annuler suivante" or "Poster suivant")
+    UI.sellButton:Show()
+  else
+    UI.sellButton:Hide()
+  end
+  UI.footer:ClearAllPoints()
+  UI.footer:SetPoint("BOTTOMLEFT", 14, 12)
+  UI.footer:SetPoint("BOTTOMRIGHT", isSell and UI.sellButton or UI.optButton, "BOTTOMLEFT", -10, 4)
   local isCraft = UI.VIEWS[mode] ~= nil -- onglet à deux vues : bouton de bascule
   if isCraft then
     UI.viewButton:Show()
@@ -703,9 +783,12 @@ function UI.Refresh()
   -- « lignes 1–16 sur 120 » (la molette fait défiler) ; court pour que la date du scan tienne
   local range = #data > shown and ("lignes %d–%d sur %d"):format(
     UI.offset + 1, math.min(#data, UI.offset + shown), #data) or (#data == 1 and "1 ligne" or ("%d lignes"):format(#data))
-  UI.footer:SetText(("%s · historique %d j · %.1f h observées · scan %s"):format(
-    range, nDays, obs / 3600,
-    db.lastScanTime and date("%d/%m %H:%M", db.lastScanTime) or "jamais"))
+  local scanAt = db.lastScanTime and date("%d/%m %H:%M", db.lastScanTime) or "jamais"
+  if m.footer then
+    UI.footer:SetText(("%s · %s · scan %s"):format(range, m.footer(), scanAt))
+  else
+    UI.footer:SetText(("%s · historique %d j · %.1f h observées · scan %s"):format(range, nDays, obs / 3600, scanAt))
+  end
 end
 
 -- Loge le contenu : dans la fenêtre d'AHLedger (sous sa barre de titre) ou dans un onglet d'HV

@@ -8,7 +8,9 @@ ignore = {
   "211/_", "211/ADDON",
 }
 -- Variables globales que l'addon crée
-globals = { "AHLedgerDB", "SlashCmdList", "SLASH_AHLEDGER1", "UISpecialFrames" }
+globals = { "AHLedgerDB", "SlashCmdList", "SLASH_AHLEDGER1", "UISpecialFrames",
+  "AHLedger_PostNext", "AHLedger_CancelNext", "BINDING_HEADER_AHLEDGER", "BINDING_NAME_AHLEDGER_POSTNEXT",
+  "BINDING_NAME_AHLEDGER_CANCELNEXT" }
 -- API du jeu lues par l'addon (Classic et Retail, selon le client)
 read_globals = {
   "_G", "CreateFrame", "UIParent", "GameTooltip", "ItemRefTooltip", "DEFAULT_CHAT_FRAME", "C_Timer", "time", "date",
@@ -16,7 +18,7 @@ read_globals = {
   "UnitClass", "GetZoneText", "GetMoney", "LibStub", "PlaySound", "SOUNDKIT", "ITEM_QUALITY_COLORS", "ChatFontNormal",
   "ChatEdit_InsertLink", "IsModifiedClick", "TooltipDataProcessor", "Enum", "C_EventUtils",
   "C_Item", "GetItemInfo",
-  "C_AuctionHouse", "QueryAuctionItems", "CanSendAuctionQuery", "GetNumAuctionItems", "GetAuctionItemInfo",
+  "C_AuctionHouse", "ItemLocation", "QueryAuctionItems", "CanSendAuctionQuery", "GetNumAuctionItems", "GetAuctionItemInfo",
   "GetAuctionItemTimeLeft", "GetAuctionItemLink", "AuctionFrame", "AuctionHouseFrame", "AuctionHouseFrameDisplayMode", "AuctionFrameTab1",
   "AuctionFrameTab_OnClick", "BrowseName", "GetFramesRegisteredForEvent", "Auctionator",
   "GetMerchantNumItems", "GetMerchantItemInfo", "GetMerchantItemLink", "C_MerchantFrame",
