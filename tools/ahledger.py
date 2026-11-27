@@ -4,19 +4,33 @@
 Usage :
   python ahledger.py import "<WoW>/_forever_/WTF/Account/<COMPTE>/SavedVariables/AHLedger.lua"
   python ahledger.py report [--realm "Royaume-Horde"] [--days 7]
+  python ahledger.py brief  "<...>/SavedVariables/AHLedger.lua" [--out rapport.md]
+      (rapport pour Claude, enregistré par l'addon après chaque scan et à la déconnexion)
+  python ahledger.py sync [--sv <AHLedger.lua>] [--to <dossier Google Drive>] [--once]
+      (surveille les SavedVariables et copie le rapport dans Google Drive à chaque /reload ou déconnexion,
+       avec METHODE.md, la méthode de lecture du rapport ;
+       sans options, trouve tout seul le fichier de l'addon et le dossier « Mon Drive »)
 
 Rien ici ne touche au jeu : le script lit uniquement le fichier écrit par le client
 au /reload ou à la déconnexion (comme le font TSM ou les gestionnaires d'addons).
 """
 import argparse
+import glob
+import os
 import re
 import sqlite3
 import statistics
 import sys
+import time
+# Console Windows (cp1252) : on force l'UTF-8 pour les accents et les flèches
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        _s.reconfigure(encoding="utf-8", errors="replace")
+from datetime import datetime
 from pathlib import Path
 
 DB_PATH = Path(__file__).with_name("ahledger.sqlite")
-AH_CUT = 0.05  # commission de l'HV (5 % en Classic, à vérifier sur Forever)
+AH_CUT = 0.05  # commission de l'HV (5 %, mesuré sur Forever le 23/11/2026)
 
 
 # --------------------------------------------------------------------------
@@ -282,6 +296,119 @@ def cmd_report(realm, days, top):
         print("(aucune session — /ahl farm start puis /ahl farm stop en jeu)")
 
 
+def cmd_brief(path, out):
+    data = LuaParser(Path(path).read_text(encoding="utf-8")).parse_file().get("AHLedgerDB") or {}
+    brief = data.get("brief")
+    if not brief or not brief.get("text"):
+        sys.exit("Pas encore de rapport : fais un scan en jeu (ou /ahl claude), puis /reload.")
+    text = brief["text"]
+    if out:
+        Path(out).write_text(text, encoding="utf-8")
+        print(f"Rapport écrit dans {out} ({len(text)} caractères).")
+    else:
+        print(text)
+
+
+# --------------------------------------------------------------------------
+# Synchronisation vers Google Drive (via Google Drive pour ordinateur)
+# --------------------------------------------------------------------------
+WOW_ROOTS = [
+    r"C:\Program Files (x86)\World of Warcraft", r"C:\Program Files\World of Warcraft",
+    r"D:\World of Warcraft", r"D:\Games\World of Warcraft", r"E:\World of Warcraft",
+    "/Applications/World of Warcraft",
+]
+DRIVE_NAMES = ["My Drive", "Mon Drive"]
+HISTORY_KEEP = 30
+
+
+def find_saved_variables():
+    """Le fichier AHLedger.lua le plus récent parmi les installations de WoW courantes."""
+    found = []
+    for root in WOW_ROOTS:
+        found += glob.glob(os.path.join(root, "_*_", "WTF", "Account", "*", "SavedVariables", "AHLedger.lua"))
+    return max(found, key=os.path.getmtime) if found else None
+
+
+def find_drive_folder(candidates=None):
+    """Le dossier « Mon Drive » de Google Drive pour ordinateur (Windows : lecteur G: par défaut ; macOS : CloudStorage).
+    Avec plusieurs comptes Google (un lecteur chacun), on prend celui qui a déjà un dossier AHLedger."""
+    if candidates is None:
+        candidates = drive_candidates()
+    found = [c for c in candidates if os.path.isdir(c)]
+    for c in found:
+        if os.path.isdir(os.path.join(c, "AHLedger")):
+            return c
+    return found[0] if found else None
+
+
+def drive_candidates():
+    candidates = []
+    if os.name == "nt":
+        for letter in "GHIJKLMNOPQRSTUVWXYZDEF":
+            candidates += [f"{letter}:\\{name}" for name in DRIVE_NAMES]
+    home = Path.home()
+    candidates += [str(p) for p in home.glob("Library/CloudStorage/GoogleDrive-*/*") if p.name in DRIVE_NAMES]
+    candidates += [str(home / "Google Drive" / name) for name in DRIVE_NAMES] + [str(home / "Google Drive")]
+    return candidates
+
+
+def write_report(sv, dest):
+    data = LuaParser(Path(sv).read_text(encoding="utf-8")).parse_file().get("AHLedgerDB") or {}
+    brief = data.get("brief") or {}
+    text = brief.get("text")
+    if not text:
+        return None
+    dest = Path(dest)
+    hist = dest / "historique"
+    hist.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.fromtimestamp(brief.get("t") or time.time()).strftime("%Y-%m-%d_%Hh%M")
+    # écriture atomique : Drive ne synchronise jamais un fichier à moitié écrit
+    tmp = dest / "rapport.md.tmp"
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, dest / "rapport.md")
+    (hist / f"rapport-{stamp}.md").write_text(text, encoding="utf-8")
+    # la méthode de lecture du rapport (METHODE.md, racine de l'addon) voyage avec lui
+    methode = Path(__file__).resolve().parent.parent / "METHODE.md"
+    if methode.is_file():
+        m = methode.read_text(encoding="utf-8")
+        target = dest / "METHODE.md"
+        if not target.is_file() or target.read_text(encoding="utf-8") != m:
+            tmp = dest / "METHODE.md.tmp"
+            tmp.write_text(m, encoding="utf-8")
+            os.replace(tmp, target)
+    old = sorted(hist.glob("rapport-*.md"))
+    for f in old[:-HISTORY_KEEP]:
+        f.unlink()
+    return stamp
+
+
+def cmd_sync(sv, to, once, interval):
+    sv = sv or find_saved_variables()
+    if not sv or not os.path.isfile(sv):
+        sys.exit("Fichier AHLedger.lua introuvable : indique-le avec --sv \".../WTF/Account/<COMPTE>/SavedVariables/AHLedger.lua\"")
+    if not to:
+        drive = find_drive_folder()
+        if not drive:
+            sys.exit("Dossier Google Drive introuvable : installe Google Drive pour ordinateur, ou indique le dossier avec --to")
+        to = os.path.join(drive, "AHLedger")
+    print(f"Source : {sv}\nDestination : {to}")
+    last = None
+    while True:
+        try:
+            mtime = os.path.getmtime(sv)
+            if mtime != last:
+                time.sleep(1)  # laisse le jeu finir d'écrire le fichier
+                stamp = write_report(sv, to)
+                last = mtime
+                print(f"[{datetime.now():%H:%M}] " + (f"rapport du {stamp} copié dans Drive" if stamp
+                      else "pas encore de rapport : fais un scan en jeu puis /reload"))
+        except Exception as e:  # fichier en cours d'écriture par le jeu : on réessaie au tour suivant
+            print(f"[{datetime.now():%H:%M}] lecture impossible ({e}), nouvel essai dans {interval} s")
+        if once:
+            return
+        time.sleep(interval)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -291,8 +418,20 @@ def main():
     p.add_argument("--realm")
     p.add_argument("--days", type=int, default=7)
     p.add_argument("--top", type=int, default=15)
+    p = sub.add_parser("brief")
+    p.add_argument("file")
+    p.add_argument("--out")
+    p = sub.add_parser("sync")
+    p.add_argument("--sv")
+    p.add_argument("--to")
+    p.add_argument("--once", action="store_true")
+    p.add_argument("--interval", type=int, default=20)
     args = ap.parse_args()
-    if args.cmd == "import":
+    if args.cmd == "sync":
+        cmd_sync(args.sv, args.to, args.once, args.interval)
+    elif args.cmd == "brief":
+        cmd_brief(args.file, args.out)
+    elif args.cmd == "import":
         cmd_import(args.file)
     else:
         cmd_report(args.realm, args.days, args.top)

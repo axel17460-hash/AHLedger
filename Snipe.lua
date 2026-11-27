@@ -58,21 +58,51 @@ function Snipe.FromScan(rows, now)
 end
 
 -- Lance une recherche normale pour afficher l'objet dans l'onglet "Parcourir" de Blizzard
-function Snipe.Search(o)
+-- Affiche un objet à l'achat dans l'HV ouverte, sur l'écran que le joueur voit. Une seule recherche,
+-- lancée par son clic ; l'achat reste à faire à la main. Renvoie le chemin pris, ou nil.
+function Snipe.ShowOnAH(name)
+  if not name or name == "" then return nil end
+  local ah = AuctionHouseFrame
+  local box = type(ah) == "table" and type(ah.SearchBar) == "table" and ah.SearchBar.SearchBox
+  -- Daylight UI : sa fenêtre HV remplace celle du jeu et lance sur Achat ce qui arrive dans la case de
+  -- recherche du jeu (comme un Maj-clic sur un objet des sacs)
+  local dl = ns.UI and ns.UI.dlMain
+  if box and dl and type(dl.frame) == "table" and dl.frame.IsShown and dl.frame:IsShown() then
+    box:SetText("")
+    box:SetText(name)
+    return "daylight"
+  end
+  -- Auctionator : son API publique de recherche (onglet Achats)
+  if not QueryAuctionItems and Auctionator and Auctionator.API and Auctionator.API.v1 and Auctionator.API.v1.MultiSearch then
+    Auctionator.API.v1.MultiSearch("AHLedger", { name })
+    return "auctionator"
+  end
+  -- Fenêtre HV moderne du jeu
+  if box and ah.IsShown and ah:IsShown() then
+    if ah.SetDisplayMode and AuctionHouseFrameDisplayMode and AuctionHouseFrameDisplayMode.Buy then
+      ah:SetDisplayMode(AuctionHouseFrameDisplayMode.Buy)
+    end
+    box:SetText(name)
+    if ah.SearchBar.StartSearch then ah.SearchBar:StartSearch() end
+    return "jeu"
+  end
+  return nil
+end
+
+function Snipe.Search(o, msg)
   if not ns.isAHOpen() then
     ns.print("Ouvre l'HV pour rechercher " .. (o.name or "l'objet") .. ".")
     return
   end
-  -- Client moderne + Auctionator : on passe par son API publique de recherche
-  if not QueryAuctionItems and Auctionator and Auctionator.API and Auctionator.API.v1 and Auctionator.API.v1.MultiSearch then
-    Auctionator.API.v1.MultiSearch("AHLedger", { o.name or "" })
-    ns.print(("Recherche Auctionator : %s — pile de %d à %s (revente PNJ %s)."):format(
-      o.name or "?", o.count, ns.money(o.cost), ns.money(o.value)))
-    return
-  end
   if not QueryAuctionItems then
-    ns.print("Cherche « " .. (o.name or "?") .. " » dans l'HV pour l'acheter.")
-    return
+    local route = Snipe.ShowOnAH(o.name)
+    if not route then
+      ns.print("Cherche « " .. (o.name or "?") .. " » dans l'HV pour l'acheter.")
+    elseif msg ~= false then
+      ns.print(msg or ("Recherche : %s — pile de %d à %s (revente PNJ %s)."):format(
+        o.name or "?", o.count or 1, ns.money(o.cost or 0), ns.money(o.value or 0)))
+    end
+    return route
   end
   if not CanSendAuctionQuery() then
     ns.print("Recherche impossible pour l'instant (limite serveur), réessaie dans quelques secondes.")
@@ -81,8 +111,11 @@ function Snipe.Search(o)
   if AuctionFrameTab1 and AuctionFrameTab_OnClick then AuctionFrameTab_OnClick(AuctionFrameTab1) end
   if BrowseName then BrowseName:SetText(o.name or "") end
   QueryAuctionItems(o.name or "", nil, nil, 0, false, -1, false, true, nil)
-  ns.print(("Recherche : %s — cherche la pile de %d à %s (revente PNJ %s)."):format(
-    o.name or "?", o.count, ns.money(o.cost), ns.money(o.value)))
+  if msg ~= false then
+    ns.print(msg or ("Recherche : %s — cherche la pile de %d à %s (revente PNJ %s)."):format(
+      o.name or "?", o.count or 1, ns.money(o.cost or 0), ns.money(o.value or 0)))
+  end
+  return "classique"
 end
 
 -- Alerte en direct pendant la navigation à l'HV (pages de 50 résultats maxi)
@@ -105,7 +138,7 @@ ns.on("AUCTION_ITEM_LIST_UPDATE", function()
         if not seen[key] then
           seen[key] = true
           local link = GetAuctionItemLink("list", i) or name
-          ns.print(("|cff40ff40Revente PNJ|r %s x%d : %s %s → PNJ %s (|cff40ff40+%s|r)"):format(
+          ns.print(("|cff40ff40Revente PNJ|r %s x%d : %s %s - PNJ %s (|cff40ff40+%s|r)"):format(
             link, row.count, o.kind == "achat" and "achat immédiat" or "enchère",
             ns.money(o.cost), ns.money(o.value), ns.money(o.profit)))
           if PlaySound and SOUNDKIT and SOUNDKIT.MONEY_FRAME_OPEN then PlaySound(SOUNDKIT.MONEY_FRAME_OPEN) end

@@ -2,18 +2,39 @@
 ## Title: AHLedger
 ## Notes: Collecte de données d'hôtel des ventes, prix vendeurs et sessions de farm pour analyse hors jeu.
 ## Author: Axel
-## Version: 0.4.0
+## Version: 0.10.0
 ## SavedVariables: AHLedgerDB
+## OptionalDeps: Auctionator, DaylightUI, DaylightUI_AuctionHouse, DaylightUI_Bags, OneForAll
 
 # 16001 = WoW Forever 1.60 (même valeur qu'Auctionator)
 
 Core.lua
+Look.lua
+Options.lua
 History.lua
 Analysis.lua
+Trust.lua
+Rebound.lua
+Timing.lua
 Scan.lua
 Vendor.lua
 Farm.lua
+Professions.lua
+Bags.lua
+Ledger.lua
+Auctions.lua
+Track.lua
+RecipeDB.lua
+RecipesOneForAll.lua
+Opportunities.lua
+Sell.lua
+Today.lua
+Export.lua
+Diag.lua
 Snipe.lua
+Watch.lua
 Bridge.lua
 Tooltip.lua
+BagMarks.lua
 UI.lua
+MinimapButton.lua

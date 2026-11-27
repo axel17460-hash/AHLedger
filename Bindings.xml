@@ -1,0 +1,8 @@
+<Bindings>
+  <Binding name="AHLEDGER_POSTNEXT" header="AHLEDGER" category="ADDONS">
+    AHLedgerPostButton:Click()
+  </Binding>
+  <Binding name="AHLEDGER_CANCELNEXT" category="ADDONS">
+    AHLedgerCancelButton:Click()
+  </Binding>
+</Bindings>
