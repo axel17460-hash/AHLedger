@@ -133,6 +133,7 @@ function ns.rememberItem(itemId, name)
     local iname, _, quality, _, _, _, _, _, _, _, sellPrice, classID = ns.GetItemInfo(itemId)
     if sellPrice and not meta.s then
       meta.s = sellPrice
+      ns.itemsVersion = (ns.itemsVersion or 0) + 1 -- prix PNJ appris : vide les caches qui en dépendent (Farm.CostTable)
       meta.q = quality
       meta.c = classID
     end

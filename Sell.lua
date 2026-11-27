@@ -19,6 +19,7 @@ Sell.REPOST_MIN_GAIN = 100     -- gain attendu mini (cuivre) pour proposer d'ann
 Sell.TOL = 1                   -- cuivre d'écart toléré pour reconnaître ta propre enchère dans le carnet
 Sell.PIN_SECONDS = 4           -- après un post, l'objet n'est pas reproposé avant que les sacs soient relus
 Sell.LOGIN_MAX_AGE = 3 * 86400 -- au login, on ne résume que des relevés de moins de 3 jours
+Sell.FARM_CAP = 0.9            -- le plancher « coût de farm » ne dépasse jamais 90 % du prix réel de vente
 
 -- Règles par défaut. Trois niveaux, le plus précis gagne : défaut → catégorie (classID) → objet.
 -- Une valeur `false` désactive une règle héritée (ex. undercutPct = false : retour à l'undercut en cuivre).
@@ -27,7 +28,8 @@ Sell.DEFAULT_RULES = {
   undercutCopper = 1,     -- 1 c sous le moins cher qui n'est pas à toi
   vendorMargin = 0.10,    -- plancher : rachat PNJ + 10 % (commission déduite)
   minProfit = 0.10,       -- plancher : coût d'achat connu (courriers) + 10 %
-  farmCost = 1,           -- plancher : coût d'opportunité d'un objet farmé (Farm.UnitCost) × ce coefficient ; false = ignoré
+  farmCost = 0.5,         -- plancher : coût d'opportunité d'un objet farmé (Farm.UnitCost) × ce coefficient, plafonné à
+                          -- FARM_CAP × le prix réel (garde-fou souple : coût irrécupérable) ; false = ignoré
   floorPct = 0.70,        -- plancher : 70 % du prix réel de vente
   floorFixed = false,     -- plancher fixé à la main, en cuivre/u
   fixedPrice = false,     -- prix fixé à la main (cuivre/u) : remplace palier − undercut et le plafond, mais pas le plancher
@@ -124,8 +126,22 @@ function Sell.Cost(id)
   return costCache[id]
 end
 
--- Plancher à l'unité : le plus grand de PNJ + marge, coût d'achat + marge, coût de farm, X % du prix réel,
--- plancher fixé.
+-- Plancher « coût de farm » à l'unité : coût de farm × coefficient, commission déduite, plafonné à
+-- FARM_CAP × le prix réel s'il est connu. Le temps passé à farmer est un coût irrécupérable : il sert de
+-- garde-fou contre un marché effondré, jamais à bloquer une vente au prix réel.
+-- Renvoie le plancher (nil sans coût de farm), le coût de farm brut à l'unité et true s'il est plafonné.
+function Sell.FarmFloor(id, s, rules)
+  local farm = ns.Farm and ns.Farm.UnitCost and ns.Farm.UnitCost(id)
+  if not (farm and farm > 0) then return nil end
+  if not rules.farmCost then return nil, farm end
+  local v = farm * rules.farmCost / (1 - cut())
+  local capped = false
+  if s and s.price and v > s.price * Sell.FARM_CAP then v, capped = s.price * Sell.FARM_CAP, true end
+  return v, farm, capped
+end
+
+-- Plancher à l'unité : le plus grand de PNJ + marge, coût d'achat + marge, coût de farm (plafonné),
+-- X % du prix réel, plancher fixé.
 -- Renvoie le prix et ce qui le fixe.
 function Sell.Floor(id, s, rules)
   local best, why = 0, nil
@@ -135,9 +151,9 @@ function Sell.Floor(id, s, rules)
   if vendor > 0 then consider(vendor * (1 + (rules.vendorMargin or 0)) / (1 - cut()), "PNJ + marge") end
   local cost = Sell.Cost(id)
   if cost then consider(cost * (1 + (rules.minProfit or 0)) / (1 - cut()), "coût d'achat + marge") end
-  -- objet farmé : le temps passé à le looter vaut ton or/h de farm habituel (commission déduite, sans marge)
-  local farm = rules.farmCost and ns.Farm and ns.Farm.UnitCost and ns.Farm.UnitCost(id)
-  if farm and farm > 0 then consider(farm * rules.farmCost / (1 - cut()), "coût de farm") end
+  -- objet farmé : le temps passé à le looter, à l'or/h de sa zone (commission déduite, sans marge, plafonné)
+  local farm = Sell.FarmFloor(id, s, rules)
+  if farm then consider(farm, "coût de farm") end
   if s and s.price and rules.floorPct then
     consider(s.price * rules.floorPct, ("%.0f %% du prix réel"):format(rules.floorPct * 100))
   end
@@ -289,6 +305,16 @@ function Sell.Quote(id, opts)
   if sig["afflux"] then parts[#parts + 1] = "afflux" end
   if q.status == "plancher" then
     parts[#parts + 1] = ("%s < plancher %s (%s)"):format(plain(ns.money(price)), plain(ns.money(floor)), floorWhy or "?")
+  end
+  -- coût de farm : toujours affiché (même s'il ne fixe pas le plancher), pour juger le farm
+  local farmFloor, farmUnit, farmCapped = Sell.FarmFloor(id, s, rules)
+  if farmUnit then
+    q.farmUnit, q.farmFloor, q.farmCapped = farmUnit, farmFloor, farmCapped
+    local txt = ("coût de farm %s/u"):format(plain(ns.money(math.ceil(farmUnit))))
+    if not farmFloor then txt = txt .. " (règle désactivée)"
+    elseif farmCapped then txt = txt .. (" (plancher plafonné à %.0f %% du prix réel)"):format(Sell.FARM_CAP * 100)
+    elseif floorWhy == "coût de farm" then txt = txt .. " (fixe le plancher)" end
+    parts[#parts + 1] = txt
   end
   q.reason = table.concat(parts, " · ")
   return q
@@ -653,7 +679,7 @@ function Sell.FarmCompareText(c)
   end
   if c.ref then
     short = short .. (" · farm habituel %s/h"):format(m(c.ref))
-    long[#long + 1] = ("Ton farm habituel : %s/h (médiane de tes zones) ; c'est aussi ce que vaut le temps passé à looter un objet dans le plancher de vente (règle « farm »)."):format(m(c.ref))
+    long[#long + 1] = ("Ton farm habituel : %s/h (médiane de tes zones). Le plancher de vente (règle « farm ») valorise le temps passé à looter un objet à l'or/h de sa zone, cette médiane en repli, et ne dépasse jamais 90 %% du prix réel."):format(m(c.ref))
   end
   long[#long + 1] = "Ventes et expirations comptent à la lecture des courriers : passe à la boîte aux lettres."
   return short, table.concat(long, " ")
@@ -812,7 +838,7 @@ local function parseValue(key, text)
   elseif key == "floorFixed" or key == "fixedPrice" then
     return Sell.ParseMoney(low)
   elseif key == "farmCost" then
-    -- coefficient (1 = l'or/h de farm habituel) ; 0 désactive (false : bloque aussi le niveau hérité)
+    -- coefficient (1 = l'or/h de la zone, 0,5 par défaut) ; 0 désactive (false : bloque aussi le niveau hérité)
     local n = tonumber(low)
     if n == 0 then return false end
     return n and n > 0 and n or nil
@@ -863,7 +889,7 @@ function Sell.Command(rest)
     local key, val = args:match("^(%S+)%s+(.+)$")
     local k = key and KEY_ALIAS[key:lower()]
     if not k then
-      ns.print("Clés : undercut (1c ou 2%), plancher (70%), marge, profit, plafond (1.2), pile, piles, duree (12/24/48), sous (garder/pnj/attendre), fixe (plancher fixé), prix (prix fixé), farm (coût de farm : 1, 0.5, 0 = ignoré). « off » retire la règle.")
+      ns.print("Clés : undercut (1c ou 2%), plancher (70%), marge, profit, plafond (1.2), pile, piles, duree (12/24/48), sous (garder/pnj/attendre), fixe (plancher fixé), prix (prix fixé), farm (coût de farm : 0.5 par défaut, 1, 0 = ignoré ; plafonné à 90 % du prix réel). « off » retire la règle.")
       return
     end
     local value, clear = parseValue(k, val)
