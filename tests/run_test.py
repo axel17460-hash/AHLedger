@@ -1439,3 +1439,92 @@ assert "PNJ rachète" not in plain and "sacs 30" not in plain and "banque 0" not
 pl = [l for l in withAuct.split("\n") if l.startswith("Prix /u")][0]
 assert pl.startswith("Prix /u = le - cher ") or pl.startswith("Prix /u = réel "), pl
 print("OK : infobulle sans doublons (PNJ, stock, prix Auctionator)")
+
+# Aujourd'hui (Today.lua) : plan de séance sur le marché simulé, sacs remplis à la main
+today = lua.eval("""function(ns)
+  local T, A = ns.Today, ns.Analysis
+  local c = ns.Prof.Char()
+  local savedBags = c.bags
+  c.bags = { [4306] = 60, [2589] = 80, [929] = 6, [2592] = 30 }
+  ns.dataVersion = ns.dataVersion + 1
+  local r = {}
+  local plan, sum = T.Plan(60, 1000 * 10000)
+  r.n, r.kinds = #plan, {}
+  for _, a in ipairs(plan) do r.kinds[a.kind] = true end
+  -- temps et or respectés, quels que soient la durée et l'or disponibles
+  r.limits = true
+  for _, m in ipairs({ 15, 30, 60, 120 }) do
+    for _, gold in ipairs({ 0, 500, 5000, 10000000 }) do
+      local p, s = T.Plan(m, gold)
+      local tm, tg = 0, 0
+      for _, a in ipairs(p) do
+        tm, tg = tm + a.minutes, tg + a.gold
+        if a.trust == "bad" then r.limits = false end
+      end
+      if tm > m + 1e-6 or tg > gold or math.abs(tm - s.minutes) > 1e-6 or s.gold > gold then r.limits = false end
+    end
+  end
+  local p0 = T.Plan(30, 0)
+  r.noGold = true
+  for _, a in ipairs(p0) do if a.gold > 0 then r.noGold = false end end
+  -- tri : score (gain × fiabilité ÷ minutes) décroissant, rang = ordre du plan
+  r.sorted = true
+  for i, a in ipairs(plan) do
+    if a.order ~= i or (i > 1 and a.score > plan[i - 1].score + 1e-9) then r.sorted = false end
+  end
+  -- exclusion : flip au prix jamais vu vendu (Trust « bad »), flips d'un type qui échoue (Track)
+  local savedF, savedTS = A.Flips, ns.Track.Summary
+  local function fakeS(id, maxSold)
+    return { id = id, name = "Faux" .. id, price = 1000, ev = { list = { { maxSold, 10, "s", 10 } }, maxSold = maxSold, soldUnits = 10 } }
+  end
+  A.Flips = function()
+    return {
+      { kind = "now", id = 90001, s = fakeS(90001, 5000), qty = 10, cost = 1000, maxBuy = 100, resale = 1000, profit = 900000, roi = 9, days = 1 },
+      { kind = "now", id = 90002, s = fakeS(90002, 200), qty = 10, cost = 1000, maxBuy = 100, resale = 1000, profit = 800000, roi = 8, days = 1 },
+    }
+  end
+  local p1, s1 = T.Plan(60, 10000000)
+  r.goodIn, r.badOut = false, true
+  for _, a in ipairs(p1) do
+    if a.id == 90001 then r.goodIn = a.order == 1 end
+    if a.id == 90002 then r.badOut = false end
+  end
+  r.excl1 = s1.excluded
+  ns.Track.Summary = function() return { { key = "now", label = "Flip HV tout de suite", checked = 10, rate = 0.1 } } end
+  local p2, s2 = T.Plan(60, 10000000)
+  r.trackOut = true
+  for _, a in ipairs(p2) do if a.kind == "flip" then r.trackOut = false end end
+  r.excl2 = s2.excluded
+  -- type à moitié fiable : le conseil reste, « à tester », gain compté pour moitié dans le classement
+  ns.Track.Summary = function() return { { key = "now", label = "Flip HV tout de suite", checked = 10, rate = 0.5 } } end
+  local p3 = T.Plan(60, 10000000)
+  for _, a in ipairs(p3) do if a.id == 90001 then r.halfTrust, r.halfW = a.trust, a.weight end end
+  A.Flips, ns.Track.Summary = savedF, savedTS
+  -- commande, onglet et rapport
+  SlashCmdList.AHLEDGER("aujourdhui 30")
+  for i = #LOG, 1, -1 do if LOG[i]:find("Plan de séance", 1, true) then r.cmd = LOG[i]; break end end
+  ns.UI.Build()
+  ns.UI.todayMinutes = 30
+  ns.UI.SetMode("today")
+  r.uiRows = 0
+  for _, row in ipairs(ns.UI.rows) do if row.shown then r.uiRows = r.uiRows + 1 end end
+  r.footer = ns.UI.footer.text
+  r.btn30 = ns.UI.todayButtons[30]:IsShown()
+  ns.UI.SetMode("market")
+  r.btnHidden = not ns.UI.todayButtons[30]:IsShown()
+  r.report = ns.Export.Build():find("## Aujourd'hui", 1, true) ~= nil
+  c.bags = savedBags
+  ns.dataVersion = ns.dataVersion + 1
+  return r
+end""")(ns)
+print("Aujourd'hui :", today.n, "actions,", sorted(today.kinds.keys()), "·", strip(today.cmd), "·", strip(today.footer))
+assert today.n >= 3 and today.kinds["sell"] and today.kinds["farm"], dict(today.kinds)
+assert today.limits and today.noGold, "le plan dépasse le temps ou l'or disponibles"
+assert today.sorted, "plan non trié par gain/minute pondéré"
+assert today.goodIn and today.badOut and today.excl1 >= 1, (today.goodIn, today.badOut, today.excl1)
+assert today.trackOut and today.excl2 >= 2, (today.trackOut, today.excl2)
+assert today.halfTrust == "test" and today.halfW == 0.5, (today.halfTrust, today.halfW)
+assert "Plan de séance (30 min)" in strip(today.cmd), strip(today.cmd)
+assert today.uiRows == today.n or today.uiRows >= 3, today.uiRows
+assert "action" in strip(today.footer) and today.btn30 and today.btnHidden and today.report
+print("OK : Aujourd'hui (plan non vide, or et temps respectés, tri par gain/min, conseils non fiables écartés, onglet, commande, rapport)")

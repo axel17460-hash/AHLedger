@@ -401,6 +401,38 @@ local MODES = {
   },
 }
 
+------------------------------------------------------------------------
+-- Onglet « Aujourd'hui » : plan de séance (logique dans Today.lua). Bloc à part : MODES, EMPTY et
+-- NEEDS_SCAN sont complétés ici, les boutons de durée sont créés et montrés par les enveloppes de
+-- UI.Build et UI.SetMode en fin de fichier.
+------------------------------------------------------------------------
+UI.todayMinutes = ns.Today and ns.Today.DEFAULT_MINUTES or 60
+EMPTY.today = "Rien à proposer pour cette séance : scanne l'HV, ouvre tes sacs et tes fenêtres de métier, ou fais une session /ahl farm. Les conseils non fiables sont écartés."
+NEEDS_SCAN.today = true
+local TODAY_TRUST = { ok = "|cff40ff40fiable|r", test = "|cffffd100à tester|r" }
+MODES.today = {
+  title = "Aujourd'hui",
+  sort = "order",
+  asc = true,
+  help = "Plan de séance : flips, achats PNJ, artisanat, farm et ventes réunis, classés par gain/minute (un conseil « à tester » compte pour moitié), dans le temps choisi et sans immobiliser plus que ton or. Les conseils au prix non tenu, ou d'un type qui échoue souvent (Fiabilité), sont écartés. AHLedger n'achète ni ne poste rien seul : chaque action reste un clic. /ahl aujourdhui 30 dans le chat.",
+  footer = function() return UI.todayTotal or "" end,
+  cols = {
+    { "#", 18, function(e) return tostring(e.order) end, "order", "RIGHT" },
+    { "Action", 330, function(e) return e.text end, "order" },
+    { "Gain", 72, function(e) return "|cff40ff40" .. ns.money(e.gain) .. "|r" end, "gain", "RIGHT" },
+    { "Temps", 44, function(e) return ns.Today.MinText(e.minutes) end, "minutes", "RIGHT" },
+    { "Or/min", 62, function(e) return ns.money(e.gpm) end, "gpm", "RIGHT" },
+    { "Immobilisé", 70, function(e) return e.gold > 0 and ns.money(e.gold) or "|cff808080—|r" end, "gold", "RIGHT" },
+    { "Fiabilité", 56, function(e) return TODAY_TRUST[e.trust] or e.trust end, "weight" },
+    { "Pourquoi", 100, function(e) return (e.trustWhy and e.trustWhy ~= "fiable" and (e.trustWhy .. " · ") or "") .. (e.why or "") end, "why" },
+  },
+  rows = function()
+    local plan, sum = ns.Today.Plan(UI.todayMinutes)
+    UI.todayTotal = ns.Today.TotalText(sum, #plan)
+    return plan
+  end,
+}
+
 local function sortValue(e, key)
   if key == "name" then
     local meta = AHLedgerDB.items[e.id]
@@ -443,7 +475,7 @@ function UI.Build()
   -- Onglets
   local x = 12
   UI.modeButtons = {}
-  local TABS = { "market", "flip", "craft", "recipes", "undercut", "bags", "ledger", "vendor", "snipe", "farm" }
+  local TABS = { "today", "market", "flip", "craft", "recipes", "undercut", "bags", "ledger", "vendor", "snipe", "farm" }
   local step = math.floor((WIDTH - 24) / #TABS) -- les onglets se partagent la largeur de la fenêtre
   for _, key in ipairs(TABS) do
     local b = Look.Button(f, MODES[key].title, step - 4, 22)
@@ -917,3 +949,49 @@ ns.on("AUCTION_HOUSE_CLOSED", function()
   if UI.embedded and UI.frame then UI.frame:Hide() end
   if UI.ahButton then UI.ahButton:Hide() end
 end)
+
+------------------------------------------------------------------------
+-- Onglet « Aujourd'hui » : boutons de durée (15 / 30 / 60 / 120 min) et onglet ouvert en premier
+------------------------------------------------------------------------
+local function todayButtons()
+  if not UI.content then return nil end
+  if UI.todayButtons and UI.todayHost == UI.content then return UI.todayButtons end
+  UI.todayButtons, UI.todayHost = {}, UI.content
+  local prev
+  local list = ns.Today and ns.Today.CHOICES or { 15, 30, 60, 120 }
+  for i = #list, 1, -1 do
+    local m = list[i]
+    local b = ns.Look.Button(UI.content, m .. " min", 58, 22)
+    if prev then b:SetPoint("RIGHT", prev, "LEFT", -4, 0) else b:SetPoint("TOPRIGHT", UI.content, "TOPRIGHT", -14, -54) end
+    b:SetScript("OnClick", function() UI.todayMinutes = m; UI.offset = 0; UI.SetMode("today") end)
+    b:Hide()
+    UI.todayButtons[m] = b
+    UI.todayFirst = b
+    prev = b
+  end
+  return UI.todayButtons
+end
+
+local baseSetMode = UI.SetMode
+function UI.SetMode(mode)
+  baseSetMode(mode)
+  local buttons = todayButtons()
+  if not buttons then return end
+  local on = mode == "today"
+  for m, b in pairs(buttons) do
+    if on then b:Show() else b:Hide() end
+    ns.Look.Selected(b, on and m == UI.todayMinutes)
+  end
+  if on then
+    UI.helpZone:ClearAllPoints()
+    UI.helpZone:SetPoint("TOPLEFT", UI.content, "TOPLEFT", 14, -56)
+    UI.helpZone:SetPoint("TOPRIGHT", UI.todayFirst, "TOPLEFT", -10, -2)
+  end
+end
+
+local baseBuild = UI.Build
+function UI.Build()
+  local first = not UI.frame
+  baseBuild()
+  if first and UI.frame then UI.SetMode("today") end
+end

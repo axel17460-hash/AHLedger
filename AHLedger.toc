@@ -27,6 +27,7 @@ RecipeDB.lua
 RecipesOneForAll.lua
 Opportunities.lua
 Sell.lua
+Today.lua
 Export.lua
 Diag.lua
 Snipe.lua
