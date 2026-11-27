@@ -11,7 +11,7 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 
 ## Dépôt
 - GitHub `axel17460-hash/AHLedger`, branche de travail **`ccr-b6ab2be1-rg4weg`** (version 0.8). `main` est en retard. Ne crée pas de pull request sans demande explicite.
-- Tests : `pip install lupa luaparser`, puis `python tests/check_globals.py` et `python tests/run_test.py`. Les deux passent. `tests/harness.lua` simule l'API du jeu (Classic, sauf indication) et 14 jours de marché.
+- Tests : `pip install lupa luaparser`, puis `python tests/check_globals.py`, `python tests/run_test.py`, `python tests/test_sell.py` et `python tests/test_watch.py`. Tous passent. `tests/harness.lua` simule l'API du jeu (Classic, sauf indication) et 14 jours de marché.
 - Workflow GitHub `.github/workflows/tests.yml` : jamais vu tourner (aucune exécution sur la branche au dernier contrôle). Les Actions sont peut-être désactivées sur le dépôt.
 
 ## Architecture (ordre de chargement du .toc)
@@ -25,6 +25,7 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 | `Trust.lua` | Fiabilité d'un prix : ventes / expirations / annonces qui traînent au prix près (`db.outcomes`, date de 1re apparition `f` dans `lastSigs`), tes courriers ; plafond au plus haut prix vu vendu (`s.capped`), verdict `Trust.Check(s, prix)` → ok / test / bad |
 | `Opportunities.lua` | Onglets « Rentables » (recettes rentables, apprises ou non, avec accès et amorti) et « Sous-coter » (enchère la moins chère au-dessus du prix habituel) |
 | `Vendor.lua`, `Farm.lua`, `Snipe.lua` | Prix des marchands, sessions `/ahl farm`, enchères sous le prix PNJ |
+| `Watch.lua` | Liste de surveillance : règles par objet (`AHLedgerDB.watch.items` : achat ≤, vente ≥, variation vs moy. 7 j, signal, stock <), évaluées à la fin de `Scan.Finish` (`Watch.OnScan`), alerte chat + son, anti-spam (`realmDB().watchState[id].on`) avec réarmement à marge (`Watch.REARM`, `REARM_PCT`). `/ahl surveiller …`, parseur `Watch.ParseMoney`. Vue « Surveillance » (bloc séparé de `UI.lua`, vue de l'onglet Revente PNJ), ligne « Surveillé » dans l'infobulle (hors cache). Aucun achat automatique |
 | `Professions.lua` | Niveaux de métier, recettes relevées à l'ouverture des fenêtres de métier (Classic et Retail), table des cuirs pour le dépeçage |
 | `Bags.lua` | Conseiller d'inventaire (sacs et banque) : vendre HV / garder / PNJ / attendre |
 | `Ledger.lua` | Bilan réel lu dans les courriers d'HV ; calibre `AH_CUT` et `DEPOSIT_RATE` dès 5 ventes |
@@ -53,6 +54,13 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 7. Le carnet vient du dernier scan : une enchère postée après lui n'est pas retirée du carnet (`Sell.WithoutMine` n'enlève que ce qu'il y retrouve). Rescanne après une série de mises en vente.
 Pas encore fait (dans le design `conception-vente.md`) : résumé de session (vendu, commission) dans l'onglet Farm ; coût de farm connu dans le plancher (seuls tes achats comptent) ; pas de file pour la banque.
 
+## Surveillance : à vérifier en jeu (`Watch.lua`, branche `feat/watch`, rien testé en jeu)
+1. `/ahl surveiller <Maj-clic sur un objet> achat 1g20s` : le lien collé est-il bien reconnu (format `|Hitem:…|h[…]|h|r`) ? Un nom partiel, un nom français ?
+2. Après un scan (le tien ou celui d'Auctionator), l'alerte arrive-t-elle une seule fois, avec un lien cliquable ? Le son `SOUNDKIT.RAID_WARNING` existe-t-il sur Forever (sinon `MONEY_FRAME_OPEN`) ?
+3. Vue « Surveillance » (bouton « Vue : surveillance » de l'onglet Revente PNJ) : largeur des colonnes, texte coupé de « Règles » et « Dernière alerte » (le survol l'affiche en entier).
+4. « Variation » compare le moins cher du scan à la moyenne des 7 jours (prix médian par scan) : le moins cher est souvent sous la moyenne, une règle ±10 % peut donc sonner souvent. Ajuste le seuil, ou passe la référence à la médiane du scan si c'est trop bavard.
+Limites : une alerte n'arrive qu'après un scan complet (pas pendant la navigation, l'API Classic n'existe pas sur Forever) ; pas de règles par catégorie ; rien dans le rapport Claude pour l'instant.
+
 ## Prochaines étapes, dans l'ordre
 1. **Premier test en jeu.** Installe ou mets à jour l'addon, `/reload`, puis `/ahl diag`. Corrige chaque ligne MANQUE et chaque erreur. Avec une session locale, lis directement :
    - le fichier `World of Warcraft\_forever_\WTF\Account\<COMPTE>\SavedVariables\AHLedger.lua`, écrit à `/reload` ou à la déconnexion. `AHLedgerDB.diag.lines` contient le diagnostic, `AHLedgerDB.brief.text` le rapport ;
@@ -63,7 +71,6 @@ Pas encore fait (dans le design `conception-vente.md`) : résumé de session (ve
 5. **Idées validées, pas encore faites** :
    - onglet « Aujourd'hui » : plan de séance qui combine flip, artisanat, farm et ventes ;
    - meilleur jour et meilleure heure pour vendre (motifs dans `db.recent` et `db.days`) ;
-   - liste de surveillance avec alertes de prix ;
    - résumé quotidien envoyé par Gmail à partir du rapport Drive ;
    - méthode d'analyse écrite pour que les conseils de Claude restent cohérents.
 

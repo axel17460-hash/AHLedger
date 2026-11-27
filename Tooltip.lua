@@ -332,7 +332,10 @@ local function addLines(tooltip, id)
     c = { t = now, ver = ns.dataVersion, lines = mode == "compact" and buildCompact(id) or build(id) }
     cache[key] = c
   end
-  if #c.lines == 0 then return end
+  -- objet surveillé (Watch.lua) : hors du cache, la liste change sans nouveau scan
+  local watchLabel, watchText
+  if ns.Watch then watchLabel, watchText = ns.Watch.TooltipLine(id) end
+  if #c.lines == 0 and not watchLabel then return end
   if mode == "compact" then
     if shiftHint then
       tooltip:AddDoubleLine("|cff33ccffAHLedger|r", "Maj : détails", 1, 1, 1, 0.5, 0.5, 0.5)
@@ -353,6 +356,7 @@ local function addLines(tooltip, id)
       tooltip:AddLine(l[1], l.r, l.g, l.b, true)
     end
   end
+  if watchLabel then tooltip:AddDoubleLine(watchLabel, watchText, 1, 0.82, 0, WHITE[1], WHITE[2], WHITE[3]) end
   tooltip:Show()
 end
 

@@ -30,6 +30,7 @@ Sell.lua
 Export.lua
 Diag.lua
 Snipe.lua
+Watch.lua
 Bridge.lua
 Tooltip.lua
 BagMarks.lua
