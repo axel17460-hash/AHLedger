@@ -255,7 +255,7 @@ local MODES = {
     sort = "order", -- l'ordre de la file : meilleur gain net d'abord, lignes bloquées à la fin
     asc = true,
     hint = "Clic : choisir comme prochaine mise en vente · Maj-clic : lien",
-    help = "Objets de tes sacs à vendre à l'HV d'après le conseil, au prix de tes règles : palier sain − undercut, entre plancher et plafond (/ahl vendre regles). « Poster suivant » (ou ta touche) = UNE mise en vente : la ligne choisie par un clic, sinon la première, classée par gain net attendu. Gris = le marché est sous ton plancher : rien n'est posté.",
+    help = "Objets de tes sacs à vendre à l'HV d'après le conseil, au prix de tes règles : palier sain − undercut, entre plancher et plafond (/ahl vendre regles). « Poster suivant » (ou ta touche) = UNE mise en vente : la ligne choisie par un clic, sinon la première, classée par gain net attendu. « Retirer » = l'objet n'est qu'en banque (dernier relevé) : retire-le, il entrera dans la file ; on ne poste jamais depuis la banque. Gris = le marché est sous ton plancher : rien n'est posté.",
     footer = function() return ns.Sell.SessionText() end,
     cols = {
       { "Objet", 150, function(e)
@@ -388,7 +388,8 @@ local MODES = {
   farm = {
     title = "Farm",
     sort = "total",
-    help = "Tes sessions /ahl farm, valorisées aux prix actuels. Au-delà du volume que le marché absorbe, le loot est compté au prix PNJ.",
+    help = "Tes sessions /ahl farm, valorisées aux prix actuels. Au-delà du volume que le marché absorbe, le loot est compté au prix PNJ. Le pied de page donne le bilan de ta session à l'HV (vendu, commission, acheté, solde par heure) pour comparer farmer et acheter ; /ahl vendre regle heure 50g chiffre ton heure de farm et fixe un plancher de prix aux objets que tu farmes.",
+    footer = function() return ns.Sell.SessionBalanceText() end,
     cols = {
       { "Zone", 170, function(e) return e.zone end, "zone" },
       { "Heures", 55, function(e) return ("%.1f"):format(e.hours) end, "hours", "RIGHT" },

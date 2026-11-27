@@ -135,6 +135,41 @@ check("plancher : coût d'achat + marge", cost.floor == 464 and cost.floorWhy:fi
 ns.Ledger.DB().ledger = {}
 ns.dataVersion = ns.dataVersion + 1
 
+-- plancher : coût de farm. Une session de 2 h loote 10 Alpha et 100 Beta ; l'heure vaut 26 pa (2600 c).
+-- Valeurs de marché (net) : Alpha 200, Beta 10 → 2000 et 1000 : Alpha absorbe 2/3 des 5200 c de la session.
+local realAll = ns.Analysis.All
+ns.Analysis.All = function() return { byId = { [1] = { net = 200 }, [2] = { net = 10 } } } end
+local dbf = ns.realmDB()
+local savedFarm = dbf.farm
+dbf.farm = { { zone = "Test", start = 1000, stop = 1000 + 7200, loot = { [1] = 10, [2] = 100 } } }
+check("farm : sans règle « heure », aucun coût", Sell.FarmCost(1, nil) == nil and q1().floor == 350)
+check("farm : coût à l'unité (2 h × 26 pa × 2/3 ÷ 10 u.)", near(Sell.FarmCost(1, 2600), 346.6667, 0.01), Sell.FarmCost(1, 2600))
+check("farm : Beta absorbe 1/3 sur 100 u.", near(Sell.FarmCost(2, 2600), 17.3333, 0.01), Sell.FarmCost(2, 2600))
+check("farm : un objet jamais looté n'a pas de coût de farm", Sell.FarmCost(3, 2600) == nil)
+Sell.SetRule("default", nil, "farmHourly", 2600)
+local fc = q1()
+check("farm : le coût de farm + marge relève le plancher (402) sans bloquer le prix",
+  fc.floor == 402 and fc.floorWhy:find("farm") ~= nil and fc.status == "ok" and fc.price == 499, fc.floor .. "/" .. tostring(fc.floorWhy))
+Sell.SetRule("default", nil, "farmHourly", 3600)
+local fc2 = q1()
+check("farm : une heure plus chère pousse le plancher (556) au-dessus du marché : bloqué",
+  fc2.floor == 556 and fc2.status == "plancher" and fc2.wouldPost == 499, fc2.floor .. "/" .. fc2.status)
+Sell.SetRule("default", nil, "farmHourly", nil)
+check("farm : règle retirée, plancher d'origine", q1().floor == 350)
+-- la commande : /ahl vendre regle heure 50g
+SlashCmdList.AHLEDGER("vendre regle heure 50g")
+check("/ahl vendre regle heure 50g", Sell.Rules(1).farmHourly == 500000, Sell.Rules(1).farmHourly)
+check("regles décrit l'heure de farm", (function() SlashCmdList.AHLEDGER("vendre regles"); return lastLog(3):find("heure de farm 50g") ~= nil end)(), lastLog(3))
+SlashCmdList.AHLEDGER("vendre regle heure off")
+check("/ahl vendre regle heure off", Sell.Rules(1).farmHourly == nil)
+-- une session sans loot valorisé n'a pas de coût (pas de division par zéro)
+dbf.farm = { { zone = "Vide", start = 1000, stop = 4600, loot = {} }, { zone = "Zéro", start = 1000, stop = 4600, loot = { [3] = 4 } } }
+ns.dataVersion = ns.dataVersion + 1
+check("farm : loot sans valeur = pas de coût", Sell.FarmCost(3, 2600) ~= nil and Sell.FarmCost(3, 2600) > 0 and Sell.FarmCost(1, 2600) == nil)
+dbf.farm = savedFarm
+ns.Analysis.All = realAll
+ns.dataVersion = ns.dataVersion + 1
+
 ------------------------------------------------------------------------
 -- File de mise en vente
 ------------------------------------------------------------------------
@@ -175,6 +210,44 @@ setAuctions({})
 local qs = Sell.Queue()
 check("pile 3 × 2 : on poste 3 à la fois sur 6 visés", qs[1].id == 1 and qs[1].qty == 3 and qs[1].planned == 6, qs[1].qty .. "/" .. qs[1].planned)
 Sell.SetRule("item", 1, "stackSize", nil); Sell.SetRule("item", 1, "stacks", nil)
+
+-- banque : les objets qui n'y sont que figurent dans la file (« Retirer »), jamais postables depuis la banque
+AHLedgerDB.items[6] = { n = "Zeta", s = 10, c = 7 }
+STATS[6] = { id = 6, price = 300, perDay = 5, stock = 35, signals = {}, deposit = 2 }
+book(6, { { 100, 30 }, { 500, 5 } }) -- marché bradé : sous le plancher (210)
+ADV[5], ADV[6] = 4, 5
+local cc = ns.Prof.Char()
+cc.bank, cc.bankTime = { [5] = 6, [6] = 5, [1] = 7, [4] = 2 }, time() - 7200
+local qb = Sell.Queue()
+local byBank = {}
+for _, r in ipairs(qb) do byBank[r.id] = r end
+check("banque : 5 lignes (sacs 1-3 + banque 5 et 6 ; l'objet « Garder » exclu)", #qb == 5, #qb)
+check("banque : objet seulement en banque = ligne « Retirer » non postable",
+  byBank[5] and byBank[5].inBank and byBank[5].blocked and byBank[5].action == "Retirer" and byBank[5].bankQty == 6 and byBank[5].price == 479,
+  byBank[5] and (tostring(byBank[5].action) .. "/" .. tostring(byBank[5].price)))
+check("banque : la raison dit où il est et depuis quand", byBank[5] and byBank[5].reason:find("en banque") and byBank[5].reason:find("retire") and byBank[5].reason:find("vue il y a"), byBank[5] and byBank[5].reason)
+check("banque : qté visée d'après le conseil (4 sur 6)", byBank[5] and byBank[5].qty == 4, byBank[5] and byBank[5].qty)
+check("banque : objet à la fois en sac et en banque = ligne des sacs, quantité en banque en note",
+  byBank[1] and not byBank[1].inBank and not byBank[1].blocked and byBank[1].bankQty == 7 and byBank[1].reason:find("%+7 en banque"), byBank[1] and byBank[1].reason)
+check("banque : objet en banque sous le plancher = bloqué par la règle, pas « Retirer »",
+  byBank[6] and byBank[6].inBank and byBank[6].status == "plancher" and byBank[6].action == "Garder", byBank[6] and byBank[6].action)
+local order = {}
+for i, r in ipairs(qb) do order[i] = r.id end
+check("banque : ordre = sacs rentables, banque prête, puis lignes bloquées par le plancher",
+  order[1] == 1 and order[2] == 2 and order[3] == 5 and ((order[4] == 3 and order[5] == 6) or (order[4] == 6 and order[5] == 3)), table.concat(order, ","))
+check("banque : Next ne prend jamais une ligne de banque", Sell.Next(qb).id == 1)
+Sell.Pin(5)
+check("banque : épingler une ligne de banque est sans effet", Sell.Next(qb).id == 1, Sell.Next(qb).id)
+Sell.Pin(5)
+-- les sacs vides : seule la banque reste, rien à poster
+local savedBags = cc.bags
+cc.bags = {}
+check("banque seule : rien n'est postable", Sell.Next() == nil)
+cc.bags = savedBags
+-- retour à l'état d'avant (les tests suivants comptent 3 lignes)
+cc.bank, cc.bankTime = nil, nil
+ADV[5], ADV[6] = nil, nil
+check("banque vidée : retour à 3 lignes", #Sell.Queue() == 3, #Sell.Queue())
 
 ------------------------------------------------------------------------
 -- Undercuts
@@ -338,6 +411,14 @@ L[#L + 1] = { id = 1, k = "bought", c = 5, g = 700, t = time() + 7 }            
 local ss = Sell.SessionSold()
 check("session : ventes depuis le début seulement", ss.units == 14 and ss.gross == 5800 and ss.cut == 290 and ss.net == 5510, ss.units .. "/" .. ss.gross .. "/" .. ss.net)
 check("session : texte au pied de page", plain(Sell.SessionText()):find("encaissé 14 u., commission 2s 90c, net 55s 10c") ~= nil, plain(Sell.SessionText()))
+local bl = Sell.SessionBalance()
+check("bilan : vendu net 5510, acheté 700 (5 u.), solde 4810", bl.net == 5510 and bl.bought == 700 and bl.boughtUnits == 5 and bl.balance == 4810, bl.net .. "/" .. bl.bought .. "/" .. bl.balance)
+check("bilan : solde par heure = solde ÷ durée (≥ 1 min)", bl.hours >= 1 / 60 and near(bl.perHour, bl.balance / bl.hours, 0.5), bl.hours)
+local bt = plain(Sell.SessionBalanceText())
+check("bilan : texte", bt:find("vendu 14 u., commission 2s 90c, net 55s 10c") and bt:find("acheté 7s") and bt:find("solde %+48s 10c"), bt)
+L[#L + 1] = { id = 2, k = "bought", c = 1, g = 9000, t = time() + 8 }
+check("bilan : solde négatif affiché avec un signe moins", plain(Sell.SessionBalanceText()):find("solde %-41s 90c") ~= nil, plain(Sell.SessionBalanceText()))
+L[#L] = nil
 ns.Ledger.DB().ledger = {}
 
 ------------------------------------------------------------------------
@@ -390,6 +471,30 @@ check("undercuts : bouton Annuler suivante", UI.sellButton.text == "Annuler suiv
 cancelled = {}
 UI.sellButton.scripts.OnClick()
 check("le bouton annule une seule enchère", #cancelled == 1 and cancelled[1] == 11, #cancelled)
+-- file de vente avec la banque : la ligne « Retirer » s'affiche, le bouton ne la poste pas
+ADV[5] = 4
+ns.Prof.Char().bank, ns.Prof.Char().bankTime = { [5] = 6 }, time() - 600
+setAuctions({})
+UI.SetMode("sell")
+local rowsB = rowsText()
+local retire
+for _, r in ipairs(rowsB) do if r:find("Epsilon") then retire = r end end
+check("UI file : ligne banque affichée avec « Retirer »", retire and retire:find("Retirer") and retire:find("en banque"), retire)
+check("UI file : 4 lignes avec la banque", #rowsB == 4, #rowsB)
+ns.Prof.Char().bank, ns.Prof.Char().bankTime = nil, nil
+ADV[5] = nil
+-- onglet Farm : pied de page = bilan de la session à l'HV
+UI.SetMode("farm")
+check("UI farm : sans courrier lu, le pied de page l'explique", plain(UI.footer.text):find("rien encaiss") ~= nil, plain(UI.footer.text))
+local LL = ns.Ledger.DB().ledger
+LL[#LL + 1] = { id = 1, k = "sold", c = 10, g = 5000, cut = 250, t = time() + 5 }
+LL[#LL + 1] = { id = 1, k = "bought", c = 5, g = 700, t = time() + 7 }
+ns.dataVersion = (ns.dataVersion or 0) + 1
+UI.SetMode("farm")
+local ft = plain(UI.footer.text)
+check("UI farm : bilan vendu / acheté / solde dans le pied de page", ft:find("vendu 10 u.") and ft:find("acheté 7s") and ft:find("solde %+40s 50c"), ft)
+ns.Ledger.DB().ledger = {}
+ns.dataVersion = ns.dataVersion + 1
 UI.SetMode("market")
 check("hors vente : bouton caché", UI.sellButton.shown == false)
 

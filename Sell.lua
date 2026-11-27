@@ -29,6 +29,7 @@ Sell.DEFAULT_RULES = {
   minProfit = 0.10,       -- plancher : coût d'achat connu (courriers) + 10 %
   floorPct = 0.70,        -- plancher : 70 % du prix réel de vente
   floorFixed = false,     -- plancher fixé à la main, en cuivre/u
+  farmHourly = false,     -- valeur de ton heure de farm (cuivre/h) : sert à chiffrer le coût de farm des objets que tu as farmés
   fixedPrice = false,     -- prix fixé à la main (cuivre/u) : remplace palier − undercut et le plafond, mais pas le plancher
   ceilMult = 1.2,         -- plafond : 1,2 × le prix réel de vente (évite de poster sur un pic)
   stackSize = false,      -- unités par mise en vente (false : tout le conseillé d'un coup)
@@ -123,7 +124,52 @@ function Sell.Cost(id)
   return costCache[id]
 end
 
--- Plancher à l'unité : le plus grand de PNJ + marge, coût d'achat + marge, X % du prix réel, plancher fixé.
+-- Coût de farm à l'unité, d'après tes sessions /ahl farm : chaque session « coûte » sa durée × la valeur de ton
+-- heure (règle farmHourly, en cuivre/h), répartie entre les objets looté(e)s au prorata de leur valeur de marché
+-- (net de commission, sinon prix PNJ). Le coût d'un objet = ce qu'il a absorbé de ces heures ÷ ses unités looté(e)s,
+-- toutes sessions confondues. nil sans farmHourly ou sans session qui contienne l'objet.
+local farmCache, farmKey
+function Sell.FarmCost(id, hourly)
+  if not hourly or hourly <= 0 then return nil end
+  local db = ns.realmDB()
+  local sessions = db and db.farm
+  if not sessions or #sessions == 0 then return nil end
+  local key = tostring(ns.dataVersion) .. ":" .. #sessions .. ":" .. hourly
+  if farmKey ~= key or not farmCache then
+    farmCache, farmKey = {}, key
+    local all = {}
+    if ns.Analysis and ns.Analysis.All then
+      local ok, r = pcall(ns.Analysis.All)
+      if ok and r and r.byId then all = r.byId end
+    end
+    local spent, qty = {}, {}
+    for _, f in ipairs(sessions) do
+      if f.start and f.loot then
+        local hours = math.max((f.stop or f.start) - f.start, 60) / 3600
+        local vals, total = {}, 0
+        for lid, q in pairs(f.loot) do
+          local st = all[lid]
+          local unit = st and st.net or (AHLedgerDB.items[lid] and AHLedgerDB.items[lid].s) or 0
+          vals[lid] = q * unit
+          total = total + vals[lid]
+        end
+        if total > 0 then
+          local cost = hours * hourly
+          for lid, v in pairs(vals) do
+            if v > 0 then
+              spent[lid] = (spent[lid] or 0) + cost * v / total
+              qty[lid] = (qty[lid] or 0) + f.loot[lid]
+            end
+          end
+        end
+      end
+    end
+    for lid, c in pairs(spent) do farmCache[lid] = c / qty[lid] end
+  end
+  return farmCache[id]
+end
+
+-- Plancher à l'unité : le plus grand de PNJ + marge, coût d'achat + marge, coût de farm + marge, X % du prix réel, plancher fixé.
 -- Renvoie le prix et ce qui le fixe.
 function Sell.Floor(id, s, rules)
   local best, why = 0, nil
@@ -133,6 +179,8 @@ function Sell.Floor(id, s, rules)
   if vendor > 0 then consider(vendor * (1 + (rules.vendorMargin or 0)) / (1 - cut()), "PNJ + marge") end
   local cost = Sell.Cost(id)
   if cost then consider(cost * (1 + (rules.minProfit or 0)) / (1 - cut()), "coût d'achat + marge") end
+  local farm = Sell.FarmCost(id, rules.farmHourly)
+  if farm then consider(farm * (1 + (rules.minProfit or 0)) / (1 - cut()), "coût de farm + marge") end
   if s and s.price and rules.floorPct then
     consider(s.price * rules.floorPct, ("%.0f %% du prix réel"):format(rules.floorPct * 100))
   end
@@ -330,20 +378,50 @@ function Sell.Plan(id, have, adv)
 end
 
 -- Les objets de tes sacs à vendre à l'HV, triés par gain attendu par clic (net de commission) :
--- avec 5 minutes devant toi, les meilleurs partent d'abord. Les lignes bloquées (sous le plancher) suivent.
--- La banque n'est pas proposée : on ne poste que ce qui est dans les sacs.
+-- avec 5 minutes devant toi, les meilleurs partent d'abord. Viennent ensuite les objets qui ne sont qu'en
+-- banque (dernier relevé de la banque) : ils ont un prix mais pas de clic, il faut d'abord les retirer
+-- (action « Retirer »). En dernier, les lignes bloquées par ton plancher.
+-- Un objet à la fois dans les sacs et en banque reste une ligne des sacs, avec la quantité en banque en note.
 function Sell.Queue()
   local c = ns.Prof.Char()
+  local bags, bank = c.bags or {}, c.bank or {}
   local out = {}
-  for id, n in pairs(c.bags or {}) do
+  for id, n in pairs(bags) do
     local adv = ns.Bags.Advise(id, n)
     if adv and adv.action == "Vendre HV" then
       local e = Sell.Plan(id, n, adv)
-      if e then out[#out + 1] = e end
+      if e then
+        e.rank = e.blocked and 3 or 1
+        if (bank[id] or 0) > 0 then
+          e.bankQty = bank[id]
+          e.reason = (e.reason or "") .. (" · +%d en banque"):format(bank[id])
+        end
+        out[#out + 1] = e
+      end
+    end
+  end
+  for id, n in pairs(bank) do
+    if not bags[id] then
+      local adv = ns.Bags.Advise(id, n)
+      if adv and adv.action == "Vendre HV" then
+        local e = Sell.Plan(id, n, adv)
+        if e then
+          e.inBank, e.bankQty = true, n
+          if e.status == "ok" then
+            e.action, e.blocked, e.rank = "Retirer", true, 2
+            local seen = c.bankTime and (" (vue il y a " .. ns.Auctions.LeftText(math.max(time() - c.bankTime, 60)) .. ")") or ""
+            e.reason = "en banque" .. seen .. " : retire-les, ils entreront dans la file · " .. (e.reason or "")
+          else
+            e.rank = 3
+            e.reason = "en banque · " .. (e.reason or "")
+          end
+          out[#out + 1] = e
+        end
+      end
     end
   end
   table.sort(out, function(a, b)
-    if (a.blocked or false) ~= (b.blocked or false) then return not a.blocked end
+    if a.rank ~= b.rank then return a.rank < b.rank end
     if a.net ~= b.net then return a.net > b.net end
     return a.id < b.id
   end)
@@ -668,6 +746,37 @@ function Sell.SessionText()
   return text
 end
 
+-- Bilan de la session côté HV, pour le comparer à ce que rapporte le farm (onglet Farm) :
+-- encaissé (courriers de vente lus), acheté (courriers d'achat lus), solde et solde par heure.
+-- Les courriers ne sont lus qu'à l'ouverture de la boîte aux lettres : avant, les montants sont à 0.
+function Sell.SessionBalance()
+  local r = Sell.SessionSold()
+  r.bought, r.boughtUnits = 0, 0
+  if ns.Ledger and ns.Ledger.DB then
+    for _, e in ipairs(ns.Ledger.DB().ledger or {}) do
+      if e.k == "bought" and e.t and e.t >= Sell.session.start then
+        r.bought, r.boughtUnits = r.bought + (e.g or 0), r.boughtUnits + (e.c or 0)
+      end
+    end
+  end
+  r.balance = r.net - r.bought
+  r.hours = math.max(time() - Sell.session.start, 60) / 3600
+  r.perHour = r.balance / r.hours
+  return r
+end
+
+local function signed(v) return (v < 0 and "-" or "+") .. plain(ns.money(math.abs(v))) end
+
+function Sell.SessionBalanceText()
+  local r = Sell.SessionBalance()
+  if r.units == 0 and r.boughtUnits == 0 then
+    return "HV : rien encaissé (ouvre la boîte aux lettres pour relever tes ventes et achats)"
+  end
+  return ("HV (%.1f h) : vendu %d u., commission %s, net %s · acheté %s · solde %s (%s/h)"):format(
+    r.hours, r.units, plain(ns.money(r.cut)), plain(ns.money(r.net)), plain(ns.money(r.bought)),
+    signed(r.balance), signed(r.perHour))
+end
+
 ------------------------------------------------------------------------
 -- /ahl vendre …
 ------------------------------------------------------------------------
@@ -675,7 +784,7 @@ end
 local KEY_ALIAS = {
   undercut = "undercut", plancher = "floorPct", plafond = "ceilMult", marge = "vendorMargin", profit = "minProfit",
   pile = "stackSize", piles = "stacks", duree = "duration", ["durée"] = "duration", sous = "belowFloor",
-  fixe = "floorFixed", prix = "fixedPrice",
+  fixe = "floorFixed", prix = "fixedPrice", heure = "farmHourly",
 }
 local BELOW_ALIAS = { garder = "keep", keep = "keep", pnj = "vendor", vendor = "vendor", attendre = "wait", wait = "wait" }
 
@@ -698,18 +807,18 @@ local function parseValue(key, text)
     return n and math.floor(n) or nil
   elseif key == "belowFloor" then
     return BELOW_ALIAS[low]
-  elseif key == "floorFixed" or key == "fixedPrice" then
+  elseif key == "floorFixed" or key == "fixedPrice" or key == "farmHourly" then
     return Sell.ParseMoney(low)
   end
 end
 
 local function describe(r)
   local u = r.undercutPct and ("%.1f %%"):format(r.undercutPct * 100) or plain(ns.money(r.undercutCopper or 1))
-  return ("undercut %s · plancher %.0f %% du prix réel, PNJ +%.0f %%, achat +%.0f %%%s · plafond ×%.2f · pile %s × %s · durée %s · sous le plancher : %s"):format(
+  return ("undercut %s · plancher %.0f %% du prix réel, PNJ +%.0f %%, achat +%.0f %%%s · plafond ×%.2f · pile %s × %s · durée %s · sous le plancher : %s · heure de farm %s"):format(
     u, (r.floorPct or 0) * 100, (r.vendorMargin or 0) * 100, (r.minProfit or 0) * 100,
     r.floorFixed and (" , fixe " .. plain(ns.money(r.floorFixed))) or "", r.ceilMult or 0,
     tostring(r.stackSize or "tout"), tostring(r.stacks or "auto"), r.duration and (r.duration .. " h") or "auto",
-    ACTION_LABEL[r.belowFloor or "keep"] or "?")
+    ACTION_LABEL[r.belowFloor or "keep"] or "?", r.farmHourly and (plain(ns.money(r.farmHourly)) .. "/h") or "non chiffrée")
 end
 
 function Sell.Command(rest)
@@ -747,7 +856,7 @@ function Sell.Command(rest)
     local key, val = args:match("^(%S+)%s+(.+)$")
     local k = key and KEY_ALIAS[key:lower()]
     if not k then
-      ns.print("Clés : undercut (1c ou 2%), plancher (70%), marge, profit, plafond (1.2), pile, piles, duree (12/24/48), sous (garder/pnj/attendre), fixe (plancher fixé), prix (prix fixé). « off » retire la règle.")
+      ns.print("Clés : undercut (1c ou 2%), plancher (70%), marge, profit, plafond (1.2), pile, piles, duree (12/24/48), sous (garder/pnj/attendre), fixe (plancher fixé), prix (prix fixé), heure (valeur de ton heure de farm, ex. 50g). « off » retire la règle.")
       return
     end
     local value, clear = parseValue(k, val)

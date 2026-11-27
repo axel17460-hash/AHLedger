@@ -30,7 +30,7 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 | `Ledger.lua` | Bilan réel lu dans les courriers d'HV ; calibre `AH_CUT` et `DEPOSIT_RATE` dès 5 ventes |
 | `Track.lua` | Fiabilité des conseils : note les flips / achats PNJ conseillés à chaque scan (`db.track`), les vérifie sur les scans suivants (prix tenu, écoulé) et les rapproche de tes achats réels ; vue « fiabilité » de l'onglet Bilan, `/ahl fiabilite` |
 | `RecipeDB.lua` | Fournisseurs de recettes (`RecipeDB.Register`) et planificateur de montée (`/ahl monter cuir 225`) |
-| `Sell.lua` | Module Vente (v0.9) : règles de prix par défaut / catégorie / objet (`AHLedgerDB.sell`), prix proposé (`Sell.Quote` : carnet sans tes enchères, anti-troll, plancher, plafond, undercut, durée), file de mise en vente (`Sell.Queue`, une ligne = un clic), enchères battues et gain de repost (`Sell.Undercuts`), résumé à l'ouverture de l'HV, `Sell.Post` / `Sell.CancelNext` (API `C_AuctionHouse`, un clic ou une touche = une action), `/ahl vendre …`. L'interface est dans `UI.lua` : vues « file de vente » et « undercuts » de l'onglet Mes objets. Raccourcis : `Bindings.xml` |
+| `Sell.lua` | Module Vente (v0.9) : règles de prix par défaut / catégorie / objet (`AHLedgerDB.sell`), prix proposé (`Sell.Quote` : carnet sans tes enchères, anti-troll, plancher, plafond, undercut, durée), file de mise en vente (`Sell.Queue`, une ligne = un clic ; les objets de la banque y figurent en ligne « Retirer », jamais postables), enchères battues et gain de repost (`Sell.Undercuts`), résumé à l'ouverture de l'HV, `Sell.Post` / `Sell.CancelNext` (API `C_AuctionHouse`, un clic ou une touche = une action), `/ahl vendre …`. L'interface est dans `UI.lua` : vues « file de vente » et « undercuts » de l'onglet Mes objets. Raccourcis : `Bindings.xml` |
 | `Export.lua` | Rapport texte pour Claude (`/ahl claude`), aussi sauvé dans `AHLedgerDB.brief` |
 | `Diag.lua` | `/ahl diag` : API présentes, variante utilisée, événements refusés, erreurs |
 | `Bridge.lua`, `Tooltip.lua`, `UI.lua` | Auctionator, tooltips, fenêtre à 10 onglets (aussi en onglet de l'HV via LibAHTab) |
@@ -51,7 +51,11 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 5. Le numéro d'enchère (`auctionID` de `GetOwnedAuctionInfo`) est stocké dans `Auctions` (champ `aid`) : sans lui, « Annuler suivante » ne fait rien. Rouvre l'HV pour relire tes enchères après une mise à jour de l'addon.
 6. L'interface n'a pas été vue : colonnes, grisé des lignes bloquées, bouton « Poster suivant » (largeur 120 px), pied de page de la file.
 7. Le carnet vient du dernier scan : une enchère postée après lui n'est pas retirée du carnet (`Sell.WithoutMine` n'enlève que ce qu'il y retrouve). Rescanne après une série de mises en vente.
-Pas encore fait (dans le design `conception-vente.md`) : résumé de session (vendu, commission) dans l'onglet Farm ; coût de farm connu dans le plancher (seuls tes achats comptent) ; pas de file pour la banque.
+8. Ajouts du 27/11/2026, tous hors jeu seulement (tests lupa) :
+   - **File et banque** : un objet seulement en banque apparaît avec l'action « Retirer » (non postable, rang 2, après les lignes prêtes des sacs et avant les lignes bloquées par le plancher). Vérifie que le relevé de la banque (`Bags.ScanBank`, `bankTime`) est à jour quand tu ouvres la banque, et que retirer l'objet le fait bien passer dans la file après le rescan des sacs.
+   - **Coût de farm** : règle `farmHourly` (`/ahl vendre regle heure 50g`), `Sell.FarmCost` ; l'allocation entre objets se fait au prorata de la valeur de marché, c'est un choix de conception à valider avec des vraies sessions. Sans règle, aucun effet.
+   - **Bilan de session** : `Sell.SessionBalance` / `SessionBalanceText`, pied de page de l'onglet Farm (vendu, commission, net, acheté, solde, solde/h). Vient des courriers d'HV lus : 0 tant que la boîte aux lettres n'a pas été ouverte. Texte long : vérifie qu'il n'est pas tronqué dans le pied de page.
+Plus rien de prévu dans `conception-vente.md` n'est en attente de code (reste le plafond d'enchères actives par compte, point 4).
 
 ## Prochaines étapes, dans l'ordre
 1. **Premier test en jeu.** Installe ou mets à jour l'addon, `/reload`, puis `/ahl diag`. Corrige chaque ligne MANQUE et chaque erreur. Avec une session locale, lis directement :
