@@ -135,33 +135,85 @@ check("plancher : coût d'achat + marge", cost.floor == 464 and cost.floorWhy:fi
 ns.Ledger.DB().ledger = {}
 ns.dataVersion = ns.dataVersion + 1
 
--- plancher : coût d'opportunité d'un objet farmé. Zone A (1 h) : 10 Alpha (PNJ 100) + 100 Beta (PNJ 10),
--- 2000/h ; zone B (1 h) : 100 Gamma + 12000 d'or ramassé, 13000/h. Or/h de référence = médiane = 7500.
--- Temps réparti au prorata quantité × prix PNJ : Alpha 0,5 h → 7500 × 0,5 / 10 = 375/u, plancher 375 / 0,95.
+-- plancher : coût d'opportunité d'un objet farmé (aucune stat HV : le loot est valorisé au prix PNJ).
+-- Zone A (1 h, sans or) : 10 Alpha (PNJ 100) + 100 Beta (PNJ 10) → 2000/h.
+-- Zone B (1 h) : 10 Alpha + 100 Gamma (PNJ 10) = 2000 de loot + 12000 d'or ramassé → 14000/h ; seul 1/7 du
+-- temps a servi au loot (part de l'or retirée). Zone C (10 min < 15 min) : 6 Epsilon (PNJ 10), sans or.
+-- Or/h de référence = médiane des zones d'au moins 15 min (A, B) = 8000 ; C retombe sur cette médiane.
+-- Alpha : A 2000 × 0,5 h + B 14000 × (1/7 × 0,5 h) = 2000 pour 20 u. → 100/u.
+-- Gamma : 14000 × 1/14 h / 100 = 10/u (sans retirer la part de l'or : 70/u). Epsilon : 8000 × 1/6 h / 6 ≈ 222,2/u.
 local T0 = time()
 ns.realmDB().farm = {
-  { zone = "A", start = T0 - 7200, stop = T0 - 3600, money = 0, loot = { [1] = 10, [2] = 100 } },
-  { zone = "B", start = T0 - 3600, stop = T0, money = 12000, loot = { [3] = 100 } },
+  { zone = "A", start = T0 - 7800, stop = T0 - 4200, money = 0, loot = { [1] = 10, [2] = 100 } },
+  { zone = "B", start = T0 - 4200, stop = T0 - 600, money = 12000, loot = { [1] = 10, [3] = 100 } },
+  { zone = "C", start = T0 - 600, stop = T0, money = 0, loot = { [5] = 6 } },
 }
 ns.dataVersion = ns.dataVersion + 1
-check("farm : or/h de référence = médiane des zones", near(ns.Farm.RefRate(), 7500), ns.Farm.RefRate())
-check("farm : coût/u au prorata quantité × PNJ", near(ns.Farm.UnitCost(1), 375) and near(ns.Farm.UnitCost(2), 37.5) and near(ns.Farm.UnitCost(3), 75), ns.Farm.UnitCost(1))
+check("farm : or/h de référence = médiane des zones d'au moins 15 min", near(ns.Farm.RefRate(), 8000), ns.Farm.RefRate())
+check("farm : cadence par zone (A 2000, B 14000, C absente)", near(ns.Farm.ZoneRates().A, 2000) and near(ns.Farm.ZoneRates().B, 14000)
+  and ns.Farm.ZoneRates().C == nil)
+check("farm : coût/u à l'or/h de chaque zone", near(ns.Farm.UnitCost(1), 100) and near(ns.Farm.UnitCost(2), 10), ns.Farm.UnitCost(1))
+check("farm : la part de l'or ramassé ne pèse sur aucun objet", near(ns.Farm.UnitCost(3), 10), ns.Farm.UnitCost(3))
+check("farm : zone de moins de 15 min → médiane globale", near(ns.Farm.UnitCost(5), 8000 / 36), ns.Farm.UnitCost(5))
 check("farm : objet jamais farmé, pas de coût", ns.Farm.UnitCost(4) == nil)
+check("farm : coefficient par défaut 0,5", Sell.Rules(1).farmCost == 0.5, Sell.Rules(1).farmCost)
+-- défaut 0,5 : 100 × 0,5 / 0,95 ≈ 53 < 70 % du prix réel ; le coût de farm est quand même affiché
 local fq = q1()
-check("plancher : coût de farm", fq.floor == 395 and fq.floorWhy == "coût de farm", fq.floor .. " " .. tostring(fq.floorWhy))
-Sell.SetRule("item", 1, "farmCost", 0.5)
-check("coût de farm × 0,5 : retombe sous 70 % du prix réel", q1().floor == 350, q1().floor)
+check("coût de farm × 0,5 : sous 70 % du prix réel, plancher inchangé", fq.floor == 350 and fq.floorWhy ~= "coût de farm", fq.floor)
+check("coût de farm affiché même s'il ne fixe pas le plancher", fq.reason:find("coût de farm 1s 00c/u", 1, true) ~= nil and near(fq.farmUnit, 100), fq.reason)
+-- coefficient 4 : 100 × 4 / 0,95 ≈ 421 → c'est lui qui fixe le plancher
+Sell.SetRule("item", 1, "farmCost", 4)
+local f4 = q1()
+check("plancher : coût de farm", f4.floor == 422 and f4.floorWhy == "coût de farm" and f4.reason:find("fixe le plancher") ~= nil, f4.floor .. " " .. tostring(f4.floorWhy))
+-- coefficient 10 : 1053 > 0,9 × 500 → plafonné à 450, la vente au prix réel (499) passe
+Sell.SetRule("item", 1, "farmCost", 10)
+local f10 = q1()
+check("coût de farm plafonné à 0,9 × le prix réel", f10.floor == 450 and f10.floorWhy == "coût de farm" and f10.farmCapped
+  and f10.status == "ok" and f10.price == 499 and f10.reason:find("plafonné à 90 %", 1, true) ~= nil, f10.floor .. " " .. f10.reason)
+check("sans prix réel connu : pas de plafond", Sell.Floor(1, nil, Sell.Rules(1)) == 1053, Sell.Floor(1, nil, Sell.Rules(1)))
 SlashCmdList.AHLEDGER("vendre regle farm 0")
 check("/ahl vendre regle farm 0 : désactivé par défaut", Sell.DB().default.farmCost == false and Sell.Rules(2).farmCost == nil)
-check("… mais la règle objet garde le sien", Sell.Rules(1).farmCost == 0.5)
+check("… mais la règle objet garde le sien", Sell.Rules(1).farmCost == 10)
 Sell.SetRule("item", 1, "farmCost", nil)
-check("farm désactivé : plancher habituel", q1().floor == 350, q1().floor)
+local foff = q1()
+check("farm désactivé : plancher habituel, coût affiché", foff.floor == 350 and foff.reason:find("règle désactivée") ~= nil, foff.reason)
 SlashCmdList.AHLEDGER("vendre regle farm off")
-check("farm off : retour au défaut (activé)", Sell.Rules(1).farmCost == 1 and q1().floor == 395, q1().floor)
--- session en cours : son loot compte aussi
-ns.Farm.current = { start = T0 - 1800, zone = "A", loot = { [4] = 1 }, money0 = GetMoney() }
-check("farm : la session en cours compte", ns.Farm.UnitCost(4) ~= nil and ns.Farm.UnitCost(4) > 0)
-ns.Farm.current = nil
+check("farm off : retour au défaut (0,5)", Sell.Rules(1).farmCost == 0.5 and q1().floor == 350, q1().floor)
+-- cache : invalidé quand un prix PNJ est appris, sans changement de données de marché
+ITEMS[777] = { "Nouveau", 5000, 7 }
+AHLedgerDB.items[777] = nil
+ns.realmDB().farm[1].loot[777] = 1 -- prix PNJ encore inconnu : poids minimal, loot valorisé à 0
+ns.dataVersion = ns.dataVersion + 1
+local v0, before = ns.dataVersion, ns.Farm.UnitCost(777)
+ns.rememberItem(777)               -- le prix PNJ arrive (5000) : sans changement de dataVersion
+check("cache : invalidé quand un prix PNJ est appris", ns.dataVersion == v0 and before < 2 and near(ns.Farm.UnitCost(777), 5000),
+  tostring(before) .. " → " .. tostring(ns.Farm.UnitCost(777)))
+ns.realmDB().farm[1].loot[777] = nil
+ns.dataVersion = ns.dataVersion + 1
+-- cache : par royaume
+local saveRealm = GetRealmName
+GetRealmName = function() return "Autreroyaume" end
+check("cache : par royaume (autre royaume, pas de farm)", ns.Farm.UnitCost(1) == nil and ns.Farm.RefRate() == nil)
+GetRealmName = saveRealm
+check("cache : retour au royaume, coût retrouvé", near(ns.Farm.UnitCost(1), 100), ns.Farm.UnitCost(1))
+-- session en cours : son loot compte, et chaque ramassage invalide le cache
+SlashCmdList.AHLEDGER("farm start")
+ns.Farm.current.start = T0 - 1800
+check("farm : session en cours sans loot, pas de coût", ns.Farm.UnitCost(4) == nil)
+fire("CHAT_MSG_LOOT", "You receive loot: |cffffffff|Hitem:4::::|h[Epée]|h|r.")
+local c4 = ns.Farm.UnitCost(4)
+check("farm : la session en cours compte, cache invalidé par un ramassage", c4 ~= nil and c4 > 0, c4)
+fire("CHAT_MSG_LOOT", "You receive loot: |cffffffff|Hitem:4::::|h[Epée]|h|r.")
+check("cache : 2e ramassage, coût/u recalculé", ns.Farm.UnitCost(4) ~= nil and ns.Farm.UnitCost(4) < c4, ns.Farm.UnitCost(4))
+-- or retiré du courrier pendant le farm : exclu de l'or ramassé
+fire("MAIL_SHOW")
+addMoney(50000); fire("PLAYER_MONEY")
+fire("MAIL_CLOSED")
+addMoney(300); fire("PLAYER_MONEY")
+check("farm : or du courrier exclu", ns.Farm.current.mail == 50000 and ns.Farm.CurrentStats().money == 300, ns.Farm.CurrentStats().money)
+SlashCmdList.AHLEDGER("farm stop")
+local last = ns.realmDB().farm[#ns.realmDB().farm]
+check("farm : session enregistrée sans l'or du courrier", last.money == 300 and last.mail == 50000 and last.money0 == nil, last.money)
 ns.realmDB().farm = {}
 ns.dataVersion = ns.dataVersion + 1
 check("sans session de farm : plus de coût", q1().floor == 350 and ns.Farm.RefRate() == nil)
