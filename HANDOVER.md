@@ -21,6 +21,7 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 | `History.lua` | Historique journalier compact par objet : prix, stock, vendus, ambigus, valeur vendue, expirés ; série 48 h |
 | `Analysis.lua` | Stats par objet : prix réel, vendus/j, tendances, écoulement, net de commission et de dépôt, concurrence, signaux, score. Aussi Flips HV, achat PNJ → HV, artisanat, zones de farm |
 | `Rebound.lua` | Creux de prix et rebonds par objet (taux, délai médian, meilleur jour de la semaine), appris chaque jour et gardés sans purge ; servent aux flips « à stocker » |
+| `Timing.lua` | Meilleur jour / heure pour vendre : enchères vendues réparties en 28 cases (jour × tranche de 6 h) et divisées par le temps observé dans chaque case (corrige le biais « je scanne surtout le dimanche soir »), stockées dans `db.timing` (chaînes compactes, sans purge) ; `Timing.Profile(db, id)` (id nil = tout l'HV) → meilleur jour, tranche, case, gain, fiabilité ; ligne d'infobulle si fiable, section du rapport, `/ahl moment [objet]` |
 | `Scan.lua` | Scan complet (Auctionator, Retail ou Classic), comparaison avec le scan précédent, carnet d'ordres compact `db.book` |
 | `Trust.lua` | Fiabilité d'un prix : ventes / expirations / annonces qui traînent au prix près (`db.outcomes`, date de 1re apparition `f` dans `lastSigs`), tes courriers ; plafond au plus haut prix vu vendu (`s.capped`), verdict `Trust.Check(s, prix)` → ok / test / bad |
 | `Opportunities.lua` | Onglets « Rentables » (recettes rentables, apprises ou non, avec accès et amorti) et « Sous-coter » (enchère la moins chère au-dessus du prix habituel) |
@@ -51,6 +52,7 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 5. Le numéro d'enchère (`auctionID` de `GetOwnedAuctionInfo`) est stocké dans `Auctions` (champ `aid`) : sans lui, « Annuler suivante » ne fait rien. Rouvre l'HV pour relire tes enchères après une mise à jour de l'addon.
 6. L'interface n'a pas été vue : colonnes, grisé des lignes bloquées, bouton « Poster suivant » (largeur 120 px), pied de page de la file.
 7. Le carnet vient du dernier scan : une enchère postée après lui n'est pas retirée du carnet (`Sell.WithoutMine` n'enlève que ce qu'il y retrouve). Rescanne après une série de mises en vente.
+Moment de vente (`Timing.lua`), à vérifier en jeu : l'heure vient de `date()` (heure du PC, pas du serveur) ; regarder `/ahl moment` après une ou deux semaines de scans, et la taille de `timing` dans les SavedVariables. La durée de mise en vente de `Sell.lua` ne s'en sert pas encore (idée : préférer 24/48 h si le meilleur moment tombe après 12 h).
 Pas encore fait (dans le design `conception-vente.md`) : résumé de session (vendu, commission) dans l'onglet Farm ; coût de farm connu dans le plancher (seuls tes achats comptent) ; pas de file pour la banque.
 
 ## Prochaines étapes, dans l'ordre
@@ -62,7 +64,6 @@ Pas encore fait (dans le design `conception-vente.md`) : résumé de session (ve
 4. **Synchro Google Drive** : `tools\sync_drive.bat` (Python 3 et Google Drive pour ordinateur requis). Il écrit `Mon Drive/AHLedger/rapport.md`. Le dossier Drive `AHLedger` existe déjà, créé par la session cloud. Le connecteur Drive de Claude sert à lire ce rapport pour conseiller le joueur.
 5. **Idées validées, pas encore faites** :
    - onglet « Aujourd'hui » : plan de séance qui combine flip, artisanat, farm et ventes ;
-   - meilleur jour et meilleure heure pour vendre (motifs dans `db.recent` et `db.days`) ;
    - liste de surveillance avec alertes de prix ;
    - résumé quotidien envoyé par Gmail à partir du rapport Drive ;
    - méthode d'analyse écrite pour que les conseils de Claude restent cohérents.

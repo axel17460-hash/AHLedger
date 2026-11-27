@@ -15,6 +15,7 @@ History.lua
 Analysis.lua
 Trust.lua
 Rebound.lua
+Timing.lua
 Scan.lua
 Vendor.lua
 Farm.lua

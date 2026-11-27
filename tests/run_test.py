@@ -1439,3 +1439,151 @@ assert "PNJ rachète" not in plain and "sacs 30" not in plain and "banque 0" not
 pl = [l for l in withAuct.split("\n") if l.startswith("Prix /u")][0]
 assert pl.startswith("Prix /u = le - cher ") or pl.startswith("Prix /u = réel "), pl
 print("OK : infobulle sans doublons (PNJ, stock, prix Auctionator)")
+
+# --- Meilleur jour et meilleure heure pour vendre (Timing.lua) ---
+tm = lua.eval("""function(ns)
+  local T = ns.Timing
+  -- dimanche 00:00 en heure locale (celle de date(), comme en jeu)
+  local t0 = 19700 * 86400
+  while true do
+    local d = date("*t", t0)
+    if d.wday == 1 and d.hour == 0 and d.min == 0 then break end
+    t0 = t0 + 3600 - (d.min * 60 + d.sec)
+  end
+  local function hourOf(t) local d = date("*t", t); return d.wday - 1, d.hour end
+  -- Scanne aux instants donnés ; rate(wd, h) = enchères vendues par heure (par objet)
+  local function simulate(times, rates)
+    local db = { scans = {} }
+    local last
+    for _, t in ipairs(times) do
+      local gap = last and t - last
+      local diff = {}
+      if gap then
+        for id, rate in pairs(rates) do
+          local n, x = 0, last
+          while x < t do local wd, h = hourOf(x); n = n + rate(wd, h) * math.min(3600, t - x) / 3600; x = x + 3600 end
+          diff[id] = { sold = n, ns = n }
+        end
+      end
+      T.Record(db, t, gap and diff, gap)
+      last = t
+    end
+    return db
+  end
+  local r = {}
+  -- 1) Pic connu : scans toutes les heures pendant 3 semaines ; l'objet 1 se vend 2 fois plus le dimanche soir
+  local hourly = {}
+  for h = 0, 21 * 24 do hourly[#hourly + 1] = t0 + h * 3600 end
+  local db1 = simulate(hourly, {
+    [1] = function(wd, h) return (wd == 0 and h >= 18) and 4 or 2 end,
+    [2] = function() return 2 end })
+  local p1, p2 = T.Profile(db1, 1), T.Profile(db1, 2)
+  r.peakStatus, r.peakCell, r.peakText, r.peakGain = p1.status, p1.bestCell and p1.bestCell.cell, p1.text, p1.gain
+  r.flatStatus, r.flatText = p2.status, p2.text
+  r.describe = T.Describe(p1)
+  -- 2) Biais de scan : le joueur scanne toutes les heures le dimanche soir, une seule heure (20-21 h) les
+  --    autres soirs. Ventes en réalité régulières : les comptes bruts désignent le dimanche, pas le profil.
+  local biased = {}
+  for w = 0, 2 do
+    for wd = 0, 6 do
+      local base = t0 + (w * 7 + wd) * 86400
+      if wd == 0 then for h = 18, 24 do biased[#biased + 1] = base + h * 3600 end
+      else biased[#biased + 1] = base + 20 * 3600; biased[#biased + 1] = base + 21 * 3600 end
+    end
+  end
+  local db2 = simulate(biased, { [1] = function() return 2 end,
+    [3] = function(wd, h) return (wd == 3 and h == 20) and 5 or 2 end })  -- 3 : vrai pic le mercredi soir
+  local raw = {}
+  for c, n in pairs(T.parseSparse(db2.timing.it[1])) do local wd = math.floor(c / 4); raw[wd] = (raw[wd] or 0) + n end
+  local rawBest, rawMax = nil, 0
+  for wd, n in pairs(raw) do if n > rawMax then rawBest, rawMax = wd, n end end
+  r.rawBest, r.rawRatio = rawBest, rawMax / (raw[1] or 1)
+  local pb, pw = T.Profile(db2, 1), T.Profile(db2, 3)
+  r.biasStatus, r.biasDayGain = pb.status, pb.days[0].gain
+  r.wedStatus, r.wedCell, r.wedText = pw.status, pw.bestCell and pw.bestCell.cell, pw.text
+  -- 3) Pas assez de données
+  local db3 = simulate({ t0, t0 + 3600, t0 + 7200 }, { [1] = function() return 1 end })
+  local p3 = T.Profile(db3, 1)
+  r.lowStatus, r.lowText = p3.status, T.Describe(p3)
+  -- 4) Découpage à minuit : samedi 22 h → dimanche 2 h
+  local cuts = {}
+  T.Split(t0 + 6 * 86400 + 22 * 3600, t0 + 7 * 86400 + 2 * 3600, function(c, s) cuts[#cuts + 1] = c .. "=" .. s end)
+  r.cuts = table.concat(cuts, ",")
+  -- 5) Reprise des snapshots bruts déjà stockés, sans double compte
+  local db5 = { scans = {
+    { v = 2, t = t0 + 3600, gap = 3600, items = "7=1,20,5,5,5,0,0,0,0,0,5,0,0" },
+    { v = 2, t = t0 + 7200, gap = 3600, items = "7=1,20,5,5,5,40,0,0,0,200,5,0,0;8=1,1,5,5,5,0,0,0,0,0,5,0,0" },
+    { v = 2, t = t0 + 90000, gap = 80000, items = "7=1,20,5,5,5,3,0,0,0,15,5,0,0" } } }  -- trop long : ignoré
+  T.Record(db5, t0 + 7200, { [7] = { sold = 40, ns = 2 } }, 3600)  -- même scan que le snapshot : ignoré
+  local tm5 = db5.timing
+  local obs5 = 0
+  for _, s in pairs(T.parseDense(tm5.obs)) do obs5 = obs5 + s end
+  r.bfObs, r.bfItem, r.bfN, r.bf8 = obs5, tm5.it[7], tm5.backfilled, tm5.it[8]
+  T.Record(db5, t0 + 10800, { [7] = { sold = 40, ns = 2 } }, 3600)
+  r.bfAfter = tm5.it[7]
+  -- Diff : nombre d'enchères vendues à côté des unités
+  local prev = { ["9:20:200:?"] = { c = 3, tl = 4 } }
+  local cur = { ["9:20:200:?"] = { c = 1, tl = 4 } }
+  local d = ns.Scan.Diff(prev, cur, 3600)[9]
+  r.diffNs, r.diffSold = d.ns, d.sold
+  return r
+end""")(ns)
+tmr = {k: tm[k] for k in tm.keys()}
+print("Moment de vente :", tmr)
+assert tmr["peakStatus"] == "sure" and tmr["peakCell"] == 3, tmr                     # dimanche (0) × soir (3)
+assert tmr["peakText"].startswith("+") and "dimanche soir" in tmr["peakText"] and tmr["peakGain"] > 0.5, tmr
+assert "fiable" in tmr["describe"], tmr
+assert tmr["flatStatus"] == "flat" and tmr.get("flatText") is None, tmr                 # ventes régulières : rien
+assert tmr["rawBest"] == 0 and tmr["rawRatio"] > 4, tmr                              # le biais existe en brut…
+assert tmr["biasStatus"] == "flat" and abs(tmr["biasDayGain"]) < 0.05, tmr           # … et il est corrigé
+assert tmr["wedStatus"] == "sure" and tmr["wedCell"] == 3 * 4 + 3 and "mercredi soir" in tmr["wedText"], tmr
+assert tmr["lowStatus"] == "low" and tmr["lowText"].startswith("pas assez de données"), tmr
+assert tmr["cuts"] == "27=7200,0=7200", tmr
+assert tmr["bfN"] == 2 and tmr["bfObs"] == 7200 and tmr["bfItem"] == "0:10" and tmr.get("bf8") is None, tmr
+assert tmr["bfAfter"] == "0:30", tmr                                                 # scan suivant : +2 enchères
+assert tmr["diffNs"] == 2 and tmr["diffSold"] == 40, tmr
+
+# Branchements : infobulle (seulement si fiable), rapport, /ahl moment
+br = lua.eval("""function(ns)
+  local T, db = ns.Timing, ns.realmDB()
+  local saved = db.timing
+  local function tip()
+    advance(10); ns.dataVersion = (ns.dataVersion or 0) + 1
+    TT = {}
+    IsShiftKeyDown = function() return true end
+    GameTooltip.GetItem = function() return 'Mageweave', '|Hitem:4338::::|h' end
+    GameTooltip.scripts.OnTooltipSetItem(GameTooltip)
+    IsShiftKeyDown = nil
+    return table.concat(TT, "\\n")
+  end
+  -- profil synthétique : 3 semaines observées en entier, le tisse-mage part 2× plus le dimanche soir
+  local obs, it, all = {}, {}, {}
+  for c = 0, 27 do obs[c] = 3 * 6 * 3600; it[c] = 3 * 6 * 2 * 10; all[c] = it[c] * 5 end
+  it[3] = it[3] * 2
+  db.timing = { v = 1, upto = time(), obs = "", all = T.packSparse(all), it = { [4338] = T.packSparse(it) },
+                dn = { [0] = 3, 3, 3, 3, 3, 3, 3 }, dl = {} }
+  local parts = {}
+  for c = 0, 27 do parts[c + 1] = obs[c] end
+  db.timing.obs = table.concat(parts, ",")
+  local withLine = tip()
+  local report = ns.Export.Build()
+  local n0 = #LOG
+  SlashCmdList.AHLEDGER("moment mageweave")
+  SlashCmdList.AHLEDGER("moment")
+  local said = {}
+  for i = n0 + 1, #LOG do said[#said + 1] = LOG[i] end
+  -- profil plat : pas de ligne
+  it[3] = it[2]; db.timing.it[4338] = T.packSparse(it)
+  local without = tip()
+  db.timing = saved
+  return withLine, report, table.concat(said, "\\n"), without
+end""")(ns)
+withLine, report, said, without = (strip(x) for x in br)
+print("\n".join(l for l in withLine.split("\n") if "moment" in l.lower()))
+print(report[report.find("## Meilleur moment"):][:600])
+print(said)
+assert "Meilleur moment = +" in withLine and "dimanche soir" in withLine, withLine
+assert "Meilleur moment" not in without, without
+assert "## Meilleur moment pour vendre" in report and "Mageweave Cloth : +" in report, report
+assert "Meilleur moment pour vendre Mageweave Cloth : +" in said and "fiable" in said and "Par jour : dim ×" in said, said
+print("OK : meilleur jour / heure pour vendre (pic retrouvé, biais de scan corrigé, branchements)")

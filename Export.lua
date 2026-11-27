@@ -11,7 +11,7 @@ local _, ns = ...
 local Export = {}
 ns.Export = Export
 
-Export.TOP = { market = 25, rising = 10, flip = 12, craft = 12, recipes = 12, undercut = 12, bags = 25, auctions = 30, ledger = 12, vendor = 8, farm = 6 }
+Export.TOP = { market = 25, rising = 10, flip = 12, craft = 12, recipes = 12, undercut = 12, bags = 25, auctions = 30, ledger = 12, vendor = 8, farm = 6, timing = 12 }
 
 local function plain(s) return (tostring(s or "?"):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")) end
 -- cuivre -> "12g 34s" / "3s 05c" (sans codes couleur)
@@ -185,6 +185,7 @@ function Export.Build()
   end
 
   Export.MyAuctions(add)
+  Export.Timing(add)
 
   add("")
   add("## Fiabilité des conseils (vérifiés sur les scans suivants)")
@@ -282,6 +283,28 @@ function Export.MyAuctions(add)
         gr.auctions > 1 and "s" or "", price, left and ns.Auctions.LeftText(left) or "?", verdict, market,
         gr.days and (", ~%.1f j pour tout vendre à 25 %% du marché"):format(gr.days) or "", g(gr.value))
     end
+  end
+end
+
+-- Meilleur jour et meilleure heure pour vendre (Timing.lua)
+function Export.Timing(add)
+  local T = ns.Timing
+  if not T then return end
+  local db = ns.realmDB()
+  add("")
+  add("## Meilleur moment pour vendre (heure locale)")
+  add("enchères vendues par heure de marché observée, comparées à la moyenne (×1.35 = 35 % de ventes en plus) ; tes heures de scan ne comptent pas, une case jamais observée est « ? »")
+  local p = T.Profile(db)
+  add("Tout l'HV : %s", T.Describe(p))
+  if p.status ~= "low" then
+    add("par jour : %s", T.IndexLine(p.days, 0, 6, function(k) return T.DAYS[k] end))
+    add("par tranche : %s", T.IndexLine(p.slots, 0, T.SLOTS - 1, function(k) return T.SLOT_LABELS[k] end))
+  end
+  local items = T.Items(db, "hint")
+  if #items == 0 then add("aucun objet avec un moment marqué pour l'instant") end
+  for i = 1, math.min(#items, Export.TOP.timing) do
+    local e = items[i]
+    add("%s : %s", nameOf(e.id), T.Describe(e))
   end
 end
 

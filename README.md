@@ -102,6 +102,13 @@ Pour un objet, avec le carnet du dernier scan **sans tes propres enchères** :
 - **Budget** : ton or est relevé à chaque changement (`PLAYER_MONEY`), car à la déconnexion le jeu peut déjà renvoyer 0. Chaque conseil d'achat (Flip HV, Achat PNJ) est plafonné à la moitié de ton or (`ns.Analysis.BUDGET_SHARE`) ; un flip rentable que tu ne peux pas payer est écarté, et le rapport dit combien. « Limité par ton or » signale une quantité réduite. Le rapport signale aussi une montée de métier qui demande d'avancer plus d'or que tu n'en as.
 - **Score « à farmer »** : or/jour × (1 + 3 × tendance, borné entre 0,5 et 1,5) × signaux (pénurie ×1,2, demande ×1,1, afflux ×0,8, stock lourd ×0,75, dominé ×0,85). Le tout est pondéré par la confiance dans le volume, v / (v + 3) où v = unités vues vendues : une seule vente observée ne place plus un objet en tête.
 
+## Meilleur jour et meilleure heure pour vendre
+- Chaque intervalle entre deux scans comparables (6 h au plus) répartit les enchères vues vendues, au prorata du temps, dans 28 cases : jour de la semaine × tranche de 6 h (nuit 0-6 h, matin 6-12 h, après-midi 12-18 h, soir 18-24 h, heure de ton PC). On compte des **enchères** vendues, pas des unités : une pile de 20 achetée d'un coup ne fait pas un pic.
+- **Le biais de scan est corrigé** : la durée de chaque intervalle s'ajoute aussi aux mêmes cases, et on compare des **ventes par heure observée**. Si tu scannes 4 h le dimanche soir et 30 min les autres soirs, le dimanche soir n'en paraît pas meilleur pour autant. Une case jamais observée reste inconnue (« ? ») et n'est jamais proposée.
+- Chaque case est lissée (2 h fictives au taux moyen) puis comparée au taux moyen : gain relatif et écart au hasard (loi de Poisson). **Fiable** : au moins +15 % et z ≥ 2 ; **indicatif** : +10 % et z ≥ 1. Il faut 15 enchères vendues (60 pour tout l'HV) sur 12 h observées, une case observée 2 h avec 4 ventes, et un jour de la semaine vu à 2 dates différentes ; sinon « pas assez de données ». Le moment retenu est la case précise (« +35 % de ventes le dimanche soir ») si elle tient, sinon le jour et / ou la tranche.
+- Où le voir : ligne **Meilleur moment** de l'infobulle complète (seulement si fiable), section du rapport pour Claude, et `/ahl moment` (tout l'HV et les objets les plus marqués) ou `/ahl moment <lien, id ou nom>` (indice par jour et par tranche). À ne pas confondre avec « meilleur jour pour vendre » des flips à stocker, qui porte sur le **prix** (`Rebound.lua`).
+- Stockage `timing` (par royaume, jamais purgé, chaînes compactes) ; à la première utilisation, les snapshots bruts déjà enregistrés (`/ahl raw`) sont repris (un objet vendu dans un intervalle y compte pour une enchère).
+
 ## Fiabilité d'un prix (« se vend-il vraiment à ce prix ? »)
 - Un objet peu vendu a souvent un prix **affiché** que personne ne paie. AHLedger garde maintenant, par objet et au prix près, ce qui s'est vraiment passé : unités vendues, unités expirées, annonces restées 12 h sans acheteur (14 jours). S'y ajoutent tes courriers d'HV (vendu / expiré) et, pour les jours d'avant, le prix moyen des ventes du jour.
 - Sans assez de ventes vues pour un prix réel, le prix de l'objet est **plafonné au plus haut prix vu vendu** : tout le reste (HV ou PNJ, sacs, artisanat, onglets) part de là.
@@ -118,7 +125,7 @@ Pour un objet, avec le carnet du dernier scan **sans tes propres enchères** :
 - Les seuils de dépeçage des cuirs et écailles (`Professions.lua`) sont approximatifs.
 
 ## Commandes
-`/ahl` · `/ahl options` · `/ahl scan` · `/ahl status` · `/ahl metiers` · `/ahl bilan` · `/ahl fiabilite` · `/ahl claude` · `/ahl diag` · `/ahl monter <métier> [niveau]` · `/ahl farm start|stop` · `/ahl raw on|off` (snapshots bruts pour l'export Python) · `/ahl prune <n>`
+`/ahl` · `/ahl options` · `/ahl scan` · `/ahl status` · `/ahl metiers` · `/ahl bilan` · `/ahl fiabilite` · `/ahl moment [objet]` · `/ahl claude` · `/ahl diag` · `/ahl monter <métier> [niveau]` · `/ahl farm start|stop` · `/ahl raw on|off` (snapshots bruts pour l'export Python) · `/ahl prune <n>`
 
 ## Export Python (optionnel)
 ```

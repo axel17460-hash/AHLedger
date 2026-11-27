@@ -170,6 +170,9 @@ local function build(id)
       m[#m + 1] = ("3 j : demande %s, stock %s"):format(ns.pct(s.demandChg), ns.pct(s.stockChg))
     end
     if #m > 0 then kv("Marché", join(m)) end
+    -- Meilleur moment pour vendre : seulement s'il est fiable (sinon on n'encombre pas)
+    local tp = ns.Timing and ns.Timing.Profile(db, id)
+    if tp and tp.status == "sure" then kv("Meilleur moment", tp.text) end
     book = db.book and ns.Scan.UnpackBook(db.book[id])
     local qty, n, first = bookSummary(book)
     if qty then kv(("En vente : %d u, %d prix"):format(qty, n), first) end

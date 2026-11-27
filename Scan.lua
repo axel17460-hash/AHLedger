@@ -323,6 +323,7 @@ end
 --           (voir plus bas) → ne comptent pas comme ventes
 --   exp   : étaient en "court" → très probablement expirées
 --   amb   : cas ambigus
+--   ns    : nombre d'enchères vendues (sold compte des unités)
 -- et posted : nouvelles unités apparues.
 --
 -- Forever ne donne pas le nom des vendeurs : on ne peut pas voir qu'un vendeur annule et remet
@@ -337,7 +338,7 @@ function Scan.Diff(prevSigs, sigs, gap)
   local out = {}
   local function bucket(id)
     local b = out[id]
-    if not b then b = { sold = 0, can = 0, exp = 0, amb = 0, posted = 0, soldVal = 0, lv = {}, lvExp = {} }; out[id] = b end
+    if not b then b = { sold = 0, can = 0, exp = 0, amb = 0, posted = 0, soldVal = 0, ns = 0, lv = {}, lvExp = {} }; out[id] = b end
     return b
   end
 
@@ -383,6 +384,7 @@ function Scan.Diff(prevSigs, sigs, gap)
         local sold = gone - cancelled
         if sold > 0 then
           b.sold = b.sold + sold * count
+          b.ns = b.ns + sold -- enchères vendues (et non unités) : heure des ventes, Timing.lua
           b.soldVal = b.soldVal + sold * buyout
           b.lv[#b.lv + 1] = { unit, sold * count } -- prix unitaire des unités parties (fiabilité des conseils)
         end
@@ -450,6 +452,7 @@ function Scan.Finish()
 
   ns.History.Record(db, now, stats, diff, diff and gap or nil)
   ns.History.RecordRecent(db, now, stats)
+  if ns.Timing then ns.safe("moment de vente", ns.Timing.Record, db, now, diff, diff and gap or nil) end
   ns.Snipe.FromScan(rows, now)
   if ns.Track then ns.safe("fiabilité", ns.Track.OnScan, db, now, diff) end
   if ns.Trust then ns.safe("prix tenus", ns.Trust.Record, db, now, diff, db.lastSigs, sigs) end
