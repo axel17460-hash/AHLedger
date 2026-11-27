@@ -15,7 +15,7 @@ Opp.RECIPE_MIN_PROFIT = 100     -- 1 pa de bénéfice mini par fabrication
 Opp.RECIPE_MIN_ROI = 0.15       -- et 15 % de marge sur les composants
 Opp.UNDERCUT_MIN_PREMIUM = 0.10 -- l'enchère la moins chère doit dépasser d'au moins 10 % le prix habituel
 Opp.UNDERCUT_MIN_GAIN = 200     -- au moins 2 pa de plus que d'habitude sur la quantité à poster
-Opp.UNDERCUT_STEP = 1           -- on se place 1 pc sous l'enchère la moins chère
+Opp.UNDERCUT_STEP = 100         -- 1 pa sous l'enchère la moins chère (l'HV n'accepte que des prix en argent entiers)
 Opp.UNDERCUT_POST_DAYS = 1      -- on ne poste qu'un jour de ventes : au-delà, d'autres te sous-cotent
 
 ------------------------------------------------------------------------
@@ -159,7 +159,7 @@ function Opp.UndercutFor(s, book, mine)
   if mine and mine <= low then return nil end -- c'est déjà toi le moins cher
   local fair = s.price -- prix réel de vente, sinon prix affiché plafonné au plus haut prix vu vendu
   if not fair or fair <= 0 then return nil end
-  local post = low - Opp.UNDERCUT_STEP
+  local post = math.floor((low - Opp.UNDERCUT_STEP) / 100) * 100 -- multiple d'1 pa
   local premium = post / fair - 1
   if premium < Opp.UNDERCUT_MIN_PREMIUM then return nil end
   local st = math.max(s.sellThrough or 0.67, 0.1)

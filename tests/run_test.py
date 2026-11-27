@@ -1179,7 +1179,7 @@ opp = lua.eval("""function(ns)
   for i, n in ipairs(ns.RecipeDB.order) do if n == "opp" then table.remove(ns.RecipeDB.order, i) end end
   ns.dataVersion = ns.dataVersion + 1
   return rec and rec.access or false, rec and rec.accessOrder, rec and rec.profit, rec and rec.learnCost,
-         found and found.post == low - 1, found and found.premium, found and found.qty, mineSkipped, r1
+         found and found.post == math.floor((low - 100) / 100) * 100, found and found.premium, found and found.qty, mineSkipped, r1
 end""")(ns)
 print("Opportunités :", [strip(v) for v in opp])
 assert opp[0] and "métier non appris" in strip(opp[0]) and opp[1] == 4 and opp[2] > 0 and opp[3] == 1000, opp

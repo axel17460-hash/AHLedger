@@ -265,7 +265,7 @@ local MODES = {
           return (ns.Sell.pinned == e.id and not e.bank and "|cff40ff40►|r " or "") .. name
         end, "name" },
       { "Qté", 38, function(e) return tostring(e.qty) end, "qty", "RIGHT" },
-      { "Prix/u", 78, function(e) return e.price and ns.money(e.price) or "|cff808080—|r" end, "price", "RIGHT" },
+      { "Prix/u", 78, function(e) return e.price and ns.money(e.price) or "|cff808080—|r" end, "priceSort", "RIGHT" },
       { "Palier/u", 78, function(e) return ns.money(e.tier) end, "tier", "RIGHT" },
       { "Plancher/u", 78, function(e) return ns.money(e.floor) end, "floor", "RIGHT" },
       { "Durée", 40, function(e) return e.duration .. " h" end, "duration", "RIGHT" },
@@ -854,7 +854,7 @@ function UI.Refresh()
     UI.offset + 1, math.min(#data, UI.offset + shown), #data) or (#data == 1 and "1 ligne" or ("%d lignes"):format(#data))
   local scanAt = db.lastScanTime and date("%d/%m %H:%M", db.lastScanTime) or "jamais"
   if m.footer then
-    UI.footer:SetText(("%s · %s · scan %s"):format(range, m.footer(), scanAt))
+    UI.footer:SetText(("%s · scan %s"):format(m.footer(), scanAt)) -- peu de place avant les boutons : pas de décompte de lignes
   else
     UI.footer:SetText(("%s · historique %d j · %.1f h observées · scan %s"):format(range, nDays, obs / 3600, scanAt))
   end

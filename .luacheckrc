@@ -9,8 +9,7 @@ ignore = {
 }
 -- Variables globales que l'addon crée
 globals = { "AHLedgerDB", "SlashCmdList", "SLASH_AHLEDGER1", "UISpecialFrames",
-  "AHLedger_PostNext", "AHLedger_CancelNext", "BINDING_HEADER_AHLEDGER", "BINDING_NAME_AHLEDGER_POSTNEXT",
-  "BINDING_NAME_AHLEDGER_CANCELNEXT" }
+  "BINDING_HEADER_AHLEDGER", "BINDING_NAME_AHLEDGER_POSTNEXT", "BINDING_NAME_AHLEDGER_CANCELNEXT" }
 -- API du jeu lues par l'addon (Classic et Retail, selon le client)
 read_globals = {
   "_G", "CreateFrame", "UIParent", "GameTooltip", "ItemRefTooltip", "DEFAULT_CHAT_FRAME", "C_Timer", "time", "date",
