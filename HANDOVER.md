@@ -11,7 +11,7 @@ But de ce document : permettre à une session Claude Code qui tourne **sur le PC
 
 ## Dépôt
 - GitHub `axel17460-hash/AHLedger`, branche de travail **`ccr-b6ab2be1-rg4weg`** (version 0.8). `main` est en retard. Ne crée pas de pull request sans demande explicite.
-- Tests : `pip install lupa luaparser`, puis `python tests/check_globals.py`, `python tests/run_test.py`, `python tests/test_sell.py` et `python tests/test_watch.py`. Tous passent. `tests/harness.lua` simule l'API du jeu (Classic, sauf indication) et 14 jours de marché.
+- Tests (quatre) : `pip install lupa luaparser`, puis `python tests/check_globals.py` (variables globales), `python tests/run_test.py` (marché simulé sur 14 jours, onglet Aujourd'hui), `python tests/test_sell.py` (module Vente, faux `C_AuctionHouse`) et `python tests/test_watch.py` (surveillance). Tous passent. `tests/harness.lua` simule l'API du jeu (Classic, sauf indication) et 14 jours de marché.
 - Workflow GitHub `.github/workflows/tests.yml` : jamais vu tourner (aucune exécution sur la branche au dernier contrôle). Les Actions sont peut-être désactivées sur le dépôt.
 
 ## Architecture (ordre de chargement du .toc)

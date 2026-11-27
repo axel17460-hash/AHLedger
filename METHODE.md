@@ -64,7 +64,7 @@ Marchés à ≥ 1 vendu/j et confiance ≥ 0,5 (≥ 3 ventes vues), triés par |
 - **[tout de suite]** : quelqu'un brade, le reste du marché est au prix. Quantité ≤ `FLIP_HOLD_DAYS` = 2 jours de ventes ; revente juste sous la prochaine enchère restante, sans dépasser le prix réel corrigé, ni `moy 7j`, ni le prix habituel en pic. Retenu si ROI ≥ `FLIP_MIN_ROI` 15 % **et** bénéfice ≥ `FLIP_MIN_PROFIT` 20s. Le plus fiable des flips.
 - **[à stocker]** : tout le marché est bas (creux `Rebound.DIP` = 15 % sous la médiane des 7 j précédents). Bénéfice **espéré** = chance de rebond × revente au prix d'avant + chance contraire × revente au prix du jour. `ROI ≥ FLIP_STORE_MIN_ROI` 25 %, prix d'avant ≥ revente immédiate + `FLIP_STORE_GAP` 10 %. Pas de stockage si tendance ≤ −3 %/j, sauf rebond prouvé (≥ 3 creux connus et taux ≥ 60 %).
   - « X creux sur Y remontés, délai médian N j, lent M j » : `known` (≥ `Rebound.MIN_EVENTS` = 3 creux terminés). Chance = (remontés + 1) / (creux + 2). M = délai sous lequel 8 rebonds sur 10 ont eu lieu : **l'or est immobilisé jusqu'à M jours**.
-  - « rebond inconnu, quantité de test » : moins de 3 creux, ½ journée de ventes (`FLIP_TEST_DAYS`), ≤ `FLIP_TEST_MAX_QTY` 20 u et ≤ `FLIP_TEST_MAX_COST` 20g. À traiter comme un **test**.
+  - « rebond inconnu, quantité de test » : moins de 3 creux, même chance (remontés + 1) / (creux + 2) (½ sans creux connu), ½ journée de ventes (`FLIP_TEST_DAYS`), ≤ `FLIP_TEST_MAX_QTY` 20 u et ≤ `FLIP_TEST_MAX_COST` 20g. À traiter comme un **test**.
 - « quantité limitée par ton budget », « N flips écartés : hors de ton budget » : informatif.
 - « tes reventes : … » : le joueur l'a déjà fait (`Ledger.Holds`) : preuve forte, positive ou négative.
 
@@ -78,7 +78,7 @@ Marchés à ≥ 1 vendu/j et confiance ≥ 0,5 (≥ 3 ventes vues), triés par |
 `Opp.BuildRecipes` : bénéfice ≥ `Opp.RECIPE_MIN_PROFIT` 1s et ROI ≥ `RECIPE_MIN_ROI` 15 %, prix non tenu écarté. Or/jour = bénéfice × 25 % des ventes **brutes** × confiance (moins prudent que l'Artisanat, qui prend les ventes sûres). « amortie en N j » : prix de la recette ÷ or/jour. Une recette à apprendre est un **achat** : elle compte dans l'or immobilisé.
 
 ### 3.6 `## Sous-coter`
-`Opp.UndercutFor` : l'enchère la moins chère − 1c (`UNDERCUT_STEP`) dépasse le prix (`s.price`) d'au moins `UNDERCUT_MIN_PREMIUM` 10 %, gain en plus ≥ `UNDERCUT_MIN_GAIN` 2s, ≥ 1 vendu/j. Quantité = 1 jour de ventes (`UNDERCUT_POST_DAYS`). Prix non tenu écarté ; « à tester » signalé. Ne vaut que si le joueur **a** l'objet ou peut le fabriquer moins cher (« tu en as N », « fabricable »).
+`Opp.UndercutFor` : l'enchère la moins chère − 1c (`UNDERCUT_STEP`) dépasse le prix (`s.price` : prix réel, sinon prix affiché du dernier jour plafonné au plus haut prix vu vendu) d'au moins `UNDERCUT_MIN_PREMIUM` 10 %, gain en plus ≥ `UNDERCUT_MIN_GAIN` 2s, ≥ 1 vendu/j. Quantité = 1 jour de ventes (`UNDERCUT_POST_DAYS`). Prix non tenu écarté ; « à tester » signalé. Ne vaut que si le joueur **a** l'objet ou peut le fabriquer moins cher (« tu en as N », « fabricable »).
 
 ### 3.7 `## Montée <métier> A → B`
 `ns.Plan.Level` : coût net (négatif = gain si tout se revend), **« à avancer »** = or à sortir avant de revendre (compte dans l'or immobilisé), « (tu n'as que …) » = impossible en l'état. « plan partiel » = seuils de recettes inconnus (pas d'addon de recettes) : ne promets pas le niveau final.
