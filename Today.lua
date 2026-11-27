@@ -426,6 +426,7 @@ function Today.Candidates(minutes, gold)
     local ok, err = pcall(fn, ctx)
     if not ok then
       ns.errors[#ns.errors + 1] = "aujourd'hui/" .. label .. " : " .. tostring(err)
+      if #ns.errors > 20 then table.remove(ns.errors, 1) end
     end
   end
   try("ventes", sellActions)
@@ -466,9 +467,24 @@ end
 --   minutes : durée de la séance (défaut DEFAULT_MINUTES) ; orDisponible : en cuivre (défaut : ton or)
 --   résumé = { gain, minutes, gold, minutesMax, goldMax, excluded (non fiables écartés), skipped (ne tiennent
 --   pas), dup (autre action déjà retenue pour le même objet) }
+-- Cache du plan : le calcul relance Sell.Queue, Flips, Crafts, Bags, Track et FarmZones ; on ne le refait
+-- pas à chaque rafraîchissement de l'UI (molette, tri) tant que rien n'a bougé (données, or, farm) et au
+-- plus une fois toutes les PLAN_TTL secondes (les sacs ne changent pas ns.dataVersion).
+Today.PLAN_TTL = 5
+local planCache = {}
+
 function Today.Plan(minutes, gold)
   minutes = tonumber(minutes) or Today.DEFAULT_MINUTES
   gold = tonumber(gold) or (ns.Analysis.Gold()) or 0
+  local key = table.concat({ minutes, gold, ns.dataVersion or 0, ns.Farm and ns.Farm.gen or 0 }, ":")
+  local now = time()
+  if planCache.key == key and now - planCache.t < Today.PLAN_TTL then return planCache.plan, planCache.sum end
+  local plan, sum = Today.PlanUncached(minutes, gold)
+  planCache.key, planCache.t, planCache.plan, planCache.sum = key, now, plan, sum
+  return plan, sum
+end
+
+function Today.PlanUncached(minutes, gold)
   local cands = Today.Candidates(minutes, gold)
   local pool, excluded = {}, 0
   for _, a in ipairs(cands) do

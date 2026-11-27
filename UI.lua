@@ -277,7 +277,7 @@ local MODES = {
       { "Pourquoi", 140, function(e) return e.reason or "" end, "reason" },
     },
     rows = function() return ns.Sell.Queue() end,
-    onClick = function(e) ns.Sell.Pin(e.id); UI.Refresh() end,
+    onClick = function(e) if e.bank then return end; ns.Sell.Pin(e.id); UI.Refresh() end, -- banque : à retirer d'abord
   },
   repost = {
     title = "Undercuts",

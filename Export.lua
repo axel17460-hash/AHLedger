@@ -192,7 +192,8 @@ function Export.Build()
   end
 
   Export.MyAuctions(add)
-  Export.Timing(add)
+  local okT, errT = pcall(Export.Timing, add)
+  if not okT then add(""); add("## Meilleur moment pour vendre"); add("indisponible : %s", plain(tostring(errT))) end
 
   add("")
   add("## Fiabilité des conseils (vérifiés sur les scans suivants)")

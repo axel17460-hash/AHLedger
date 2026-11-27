@@ -641,7 +641,16 @@ function Sell.SessionSold() return Sell.SalesSummary(Sell.session.start) end
 -- l'or/h du farm (loot valorisé + or ramassé) et de ton or/h de farm habituel (médiane de tes zones).
 -- { game = SalesSummary, farm = Farm.CurrentStats() ou nil, farmSales = SalesSummary depuis le début du farm,
 --   ref = or/h de référence ou nil }
+-- Mis en cache une seconde : l'aide et le pied de page de l'onglet Farm l'appellent à chaque rafraîchissement
+local farmCmp = {}
 function Sell.FarmCompare()
+  local key = table.concat({ time(), ns.dataVersion or 0, ns.Farm and ns.Farm.gen or 0 }, ":")
+  if farmCmp.key == key then return farmCmp.r end
+  farmCmp.key, farmCmp.r = key, Sell.FarmCompareUncached()
+  return farmCmp.r
+end
+
+function Sell.FarmCompareUncached()
   local r = { game = Sell.SalesSummary(Sell.session.start) }
   local F = ns.Farm
   if F then

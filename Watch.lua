@@ -239,7 +239,11 @@ end
 -- Mesures de marché d'un objet après un scan : stats = { [id] = { q } } du scan (Scan.Finish)
 function Watch.Measure(db, id, stats)
   local s = ns.Analysis and ns.Analysis.Get(id)
-  local m = { price = db.lastMin and db.lastMin[id], q = stats and (stats[id] and stats[id].q or 0) or nil }
+  -- objet absent du scan : 0 en vente, sauf si des lignes sont restées illisibles (stock alors inconnu)
+  local incomplete = ns.Scan and ns.Scan.pending and #ns.Scan.pending > 0
+  local q
+  if stats then q = stats[id] and stats[id].q or (not incomplete and 0 or nil) end
+  local m = { price = db.lastMin and db.lastMin[id], q = q }
   if s then
     m.vsAvg, m.avg7 = s.vsAvg, s.avg7
     m.signals = {}

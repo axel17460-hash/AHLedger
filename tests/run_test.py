@@ -1715,6 +1715,26 @@ assert "## Meilleur moment pour vendre" in report and "Mageweave Cloth : +" in r
 assert "Meilleur moment pour vendre Mageweave Cloth : +" in said and "fiable" in said and "Par jour : dim ×" in said, said
 print("OK : meilleur jour / heure pour vendre (pic retrouvé, biais de scan corrigé, branchements)")
 # Aujourd'hui (Today.lua) : plan de séance sur le marché simulé, sacs remplis à la main
+# Cache du plan : même clé → même résultat sans recalcul ; TTL 0 pour les tests qui remplacent des fonctions
+cache = lua.eval("""function(ns)
+  local T = ns.Today
+  local n, saved = 0, T.PlanUncached
+  T.PlanUncached = function(...) n = n + 1; return saved(...) end
+  T.PLAN_TTL = 5
+  T.Plan(30, 1000); T.Plan(30, 1000)
+  local same = n
+  T.Plan(60, 1000)
+  local other = n
+  ns.dataVersion = ns.dataVersion + 1
+  T.Plan(60, 1000)
+  local bumped = n
+  T.PlanUncached = saved
+  T.PLAN_TTL = 0
+  return same, other, bumped
+end""")(ns)
+assert tuple(cache) == (1, 2, 3), tuple(cache)
+print("OK : cache du plan Aujourd'hui (même clé : pas de recalcul ; durée ou données changées : recalcul)")
+
 today = lua.eval("""function(ns)
   local T, A = ns.Today, ns.Analysis
   local c = ns.Prof.Char()

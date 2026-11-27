@@ -67,7 +67,9 @@ ns.on("PLAYER_MONEY", function() onMoney() end)
 -- Or ramassé d'une session en cours, hors or du courrier
 local function sessionMoney(s)
   if not s.money0 then return s.money or 0 end
-  return GetMoney() - s.money0 - (s.mail or 0)
+  local m = GetMoney()
+  if m == 0 and s.lastMoney then m = s.lastMoney end -- au logout, GetMoney() peut renvoyer 0
+  return m - s.money0 - (s.mail or 0)
 end
 
 function Farm.Start()
