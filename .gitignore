@@ -1,3 +1,4 @@
 *.sqlite
 __pycache__/
 tests/AHLedger.lua
+.tmp.*/

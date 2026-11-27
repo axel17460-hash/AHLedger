@@ -1,12 +1,16 @@
 -- AHLedger - Historique journalier compact par objet
 --
 -- db.days[jour]  = { obs = secondes de marché observées (somme des écarts entre scans comparables),
---                    scans = nombre de scans }
--- db.hist[id][jour] = "sommePrix,nbPrix,sommeStock,vendu,ambigu,valeurVendue"
+--                    o9 = dont observées depuis la 0.9, scans = nombre de scans }
+-- db.hist[id][jour] = "sommePrix,nbPrix,sommeStock,vendu,ambigu,valeurVendue,expiré"
 --   sommePrix/nbPrix : moyenne des prix médians affichés ce jour-là
 --   sommeStock       : à diviser par days[jour].scans (stock moyen à l'HV)
 --   vendu/ambigu     : unités disparues estimées vendues / incertaines
 --   valeurVendue     : cuivre total des enchères vendues (=> prix réel de vente)
+--   expiré           : unités disparues en fin de durée (=> taux d'écoulement) ; absent des anciennes données
+--   annulé           : unités retirées alors qu'une enchère moins chère restait en vente (pas des ventes) ;
+--                      absent avant la 0.9
+--   sommeMin         : somme des prix les plus bas (un par scan, divisé par nbPrix) ; absent avant la 0.9
 local _, ns = ...
 
 local History = {}
@@ -20,17 +24,19 @@ end
 
 function History.parse(s)
   if not s then return nil end
-  local a, b, c, d, e, f = s:match("^(%d+),(%d+),(%d+),(%d+),(%d+),(%d+)$")
+  local a, b, c, d, e, f, g, h, m = s:match("^(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),?(%d*),?(%d*),?(%d*)$")
   if not a then return nil end
   return { pSum = tonumber(a), pN = tonumber(b), qSum = tonumber(c),
-           sold = tonumber(d), amb = tonumber(e), soldVal = tonumber(f) }
+           sold = tonumber(d), amb = tonumber(e), soldVal = tonumber(f), exp = tonumber(g) or 0, can = tonumber(h) or 0,
+           mSum = tonumber(m), v9 = m ~= "" }
 end
 
 local function pack(r)
-  return table.concat({ r.pSum, r.pN, r.qSum, r.sold, r.amb, r.soldVal }, ",")
+  return table.concat({ r.pSum, r.pN, r.qSum, r.sold, r.amb, r.soldVal, r.exp or 0, r.can or 0, r.mSum or 0 }, ",")
 end
+History.Pack = pack
 
--- stats[id] = { med=, q= } pour les objets présents ; diff[id] = { sold, amb, soldVal, ... } ou nil
+-- stats[id] = { med=, q=, min= } pour les objets présents ; diff[id] = { sold, amb, soldVal, ... } ou nil
 function History.Record(db, now, stats, diff, gap)
   db.hist = db.hist or {}
   db.days = db.days or {}
@@ -41,7 +47,10 @@ function History.Record(db, now, stats, diff, gap)
     db.days[day] = dayRec
   end
   dayRec.scans = dayRec.scans + 1
-  if diff and gap then dayRec.obs = dayRec.obs + gap end
+  if diff and gap then
+    dayRec.obs = dayRec.obs + gap
+    dayRec.o9 = (dayRec.o9 or 0) + gap -- observé avec le diff de la 0.9 (expirations, annulations)
+  end
 
   local ids = {}
   for id in pairs(stats) do ids[id] = true end
@@ -50,11 +59,24 @@ function History.Record(db, now, stats, diff, gap)
   for id in pairs(ids) do
     local h = db.hist[id]
     if not h then h = {}; db.hist[id] = h end
-    local r = History.parse(h[day]) or { pSum = 0, pN = 0, qSum = 0, sold = 0, amb = 0, soldVal = 0 }
+    local r = History.parse(h[day])
+    if r and not r.v9 then
+      -- jour commencé avec une version d'avant la 0.9 : pas de prix mini pour les scans déjà comptés,
+      -- on repart de zéro pour la moyenne des prix de ce jour. Ses « ventes » comptaient aussi les
+      -- annulations et les piles achetées en partie : on n'en garde que la moitié comme sûres, comme
+      -- pour les jours entièrement anciens (Analysis.ItemStats).
+      r.pSum, r.pN = 0, 0
+      local half = math.floor(r.sold / 2)
+      if r.sold > 0 then r.soldVal = math.floor(r.soldVal * half / r.sold) end
+      r.amb, r.sold = r.amb + (r.sold - half), half
+    end
+    r = r or { pSum = 0, pN = 0, qSum = 0, sold = 0, amb = 0, soldVal = 0, exp = 0, can = 0 }
+    r.mSum = r.mSum or 0
     local s = stats[id]
     if s and s.med and s.med > 0 then
       r.pSum = r.pSum + s.med
       r.pN = r.pN + 1
+      r.mSum = r.mSum + (s.min and s.min > 0 and s.min or s.med)
     end
     if s then r.qSum = r.qSum + s.q end
     local d = diff and diff[id]
@@ -62,6 +84,8 @@ function History.Record(db, now, stats, diff, gap)
       r.sold = r.sold + d.sold
       r.amb = r.amb + d.amb
       r.soldVal = r.soldVal + d.soldVal
+      r.exp = (r.exp or 0) + (d.exp or 0)
+      r.can = (r.can or 0) + (d.can or 0)
     end
     h[day] = pack(r)
   end

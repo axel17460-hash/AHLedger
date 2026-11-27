@@ -15,9 +15,28 @@ local CHUNK = 400            -- enchères lues par frame
 local RETRY_PASSES = 4       -- relectures des lignes incomplètes (hasAllInfo == false)
 local RETRY_DELAY = 0.5
 local MAX_DIFF_GAP = 12 * 3600 -- au-delà, la comparaison avec le scan précédent n'a plus de sens
+-- Scan tronqué (liste reçue en partie : 1 839 enchères au lieu de ~40 000 le 25/11) : ses rares
+-- enchères chères passaient pour les prix du jour, et toutes les autres pour des ventes.
+-- Un scan sous 35 % de la taille habituelle (médiane des 5 derniers) est refusé.
+Scan.COMPLETE_SHARE = 0.35
+Scan.SIZE_REF = 5
+Scan.ACCEPT_AFTER = 3       -- 3 scans refusés de suite, de taille voisine (±30 %) : le marché a rétréci,
+Scan.SAME_SIZE = 0.30       -- on les croit et cette taille devient la référence
+-- Scan reçu à moitié (35 à 60 % de la taille habituelle) ou dont des lignes ne se sont pas chargées :
+-- ses prix sont gardés, mais il n'est pas comparé au précédent (ses enchères absentes passeraient
+-- pour des ventes)
+Scan.DIFF_SHARE = 0.60
+Scan.MISSING_SHARE = 0.02   -- plus de 2 % de lignes illisibles (et plus de 20)
+
+-- Une erreur pendant la lecture d'un paquet laissait « Scan en cours… » jusqu'au /reload : on
+-- l'affiche (ns.safe) et on arrête le scan proprement
+local function guarded(label, fn)
+  return function(...)
+    if not ns.safe(label, fn, ...) and Scan.running then Scan.Abort("erreur pendant la lecture (détail : /ahl diag)") end
+  end
+end
 
 -- timeLeft : 1 = court (<30 min), 2 = moyen (30 min-2 h), 3 = long (2-12 h), 4 = très long (>12 h)
-local TL_MIN_SECONDS = { [1] = 0, [2] = 1800, [3] = 7200, [4] = 43200 }
 
 local function weightedPercentile(prices, p)
   -- prices : liste de {unit, qty} triée par unit
@@ -74,11 +93,11 @@ function Scan.Start()
   ns.print("Scan complet lancé, ne ferme pas l'HV…")
   QueryAuctionItems("", nil, nil, 0, nil, nil, true, false, nil) -- mêmes arguments qu'Auctionator
   local token = Scan.startTime
-  C_Timer.After(30, function()
+  C_Timer.After(30, guarded("scan (délai)", function()
     if Scan.running and Scan.startTime == token and not Scan.rows then
       Scan.Abort("le serveur n'a pas répondu en 30 s (scan complet refusé ou délai de 15 min pas écoulé ?)")
     end
-  end)
+  end))
 end
 
 function Scan.OnListUpdate()
@@ -89,7 +108,7 @@ function Scan.OnListUpdate()
   Scan.rows = {}
   Scan.pending = {}
   Scan.index = 0 -- certains clients indexent le résultat getAll à partir de 0 ; une ligne vide est ignorée
-  Scan.ReadChunk()
+  guarded("scan (lecture)", Scan.ReadChunk)()
 end
 
 local function readRow(i)
@@ -119,7 +138,7 @@ function Scan.ReadChunk()
   end
   Scan.index = last + 1
   if Scan.index <= Scan.total then
-    C_Timer.After(0, Scan.ReadChunk)
+    C_Timer.After(0, guarded("scan (lecture)", Scan.ReadChunk))
   else
     Scan.retryPass = 0
     Scan.Retry()
@@ -132,7 +151,7 @@ function Scan.Retry()
     return
   end
   Scan.retryPass = Scan.retryPass + 1
-  C_Timer.After(RETRY_DELAY, function()
+  C_Timer.After(RETRY_DELAY, guarded("scan (relecture)", function()
     local still = {}
     for _, i in ipairs(Scan.pending) do
       local row = readRow(i)
@@ -140,7 +159,7 @@ function Scan.Retry()
     end
     Scan.pending = still
     Scan.Retry()
-  end)
+  end))
 end
 
 -- Convertit une ligne d'infos d'enchère (format GetAuctionItemInfo / GetReplicateItemInfo)
@@ -158,27 +177,57 @@ end
 function Scan.FromAuctionator(raw)
   -- déjà lu directement via REPLICATE_ITEM_LIST_UPDATE ? on évite le doublon
   if Scan.running or Scan.RecentlyDone() then return end
-  local rows = {}
+  local rows, unread = {}, {}
   for _, e in ipairs(raw) do
     local info = e.replicateInfo or e.auctionInfo
     local tl = e.timeLeft and (e.timeLeft + 1) or 0 -- 0 = inconnu
     local r = info and rowFromInfo(info, tl)
-    if r then rows[#rows + 1] = r end
+    if r then rows[#rows + 1] = r else unread[#unread + 1] = true end
   end
   Scan.startTime = time()
   Scan.total = #raw
-  Scan.pending = {}
+  Scan.pending = unread -- lignes illisibles : comptées par Scan.Finish
   Scan.rows = rows
   Scan.source = "Auctionator"
   Scan.Finish()
 end
 
 -- Snapshot compact : une seule chaîne par scan
--- champs : nb,qté,min,p25,médiane,vendu,expiré,ambigu,posté,valeurVendue,p75,vendeurs,partTop‰
+-- champs : nb,qté,min,p25,médiane,vendu,expiré,ambigu,posté,valeurVendue,p75,vendeurs,partTop‰,annulé
 function Scan.PackItems(packed)
   local parts = {}
   for id, s in pairs(packed) do parts[#parts + 1] = id .. "=" .. s end
   return table.concat(parts, ";")
+end
+
+-- Carnet d'ordres compact : "vendeurs,partTop‰|prix:qté;prix:qté;…" (prix unitaires croissants,
+-- quantités cumulées par prix, BOOK_LEVELS niveaux au plus)
+Scan.BOOK_LEVELS = 15
+function Scan.PackBook(prices, sellers, topPermille)
+  local levels = {}
+  for _, e in ipairs(prices) do
+    local last = levels[#levels]
+    if last and last[1] == e[1] then
+      last[2] = last[2] + e[2]
+    elseif #levels < Scan.BOOK_LEVELS then
+      levels[#levels + 1] = { e[1], e[2] }
+    else
+      break
+    end
+  end
+  local parts = {}
+  for i, l in ipairs(levels) do parts[i] = l[1] .. ":" .. l[2] end
+  return sellers .. "," .. topPermille .. "|" .. table.concat(parts, ";")
+end
+
+function Scan.UnpackBook(str)
+  if not str then return nil end
+  local sellers, top, rest = str:match("^(%d+),(%d+)|(.*)$")
+  if not sellers then return nil end
+  local levels = {}
+  for p, q in rest:gmatch("(%d+):(%d+)") do levels[#levels + 1] = { tonumber(p), tonumber(q) } end
+  sellers = tonumber(sellers)
+  return { sellers = sellers > 0 and sellers or nil, top = sellers > 0 and tonumber(top) / 1000 or nil, levels = levels }
 end
 
 function Scan.RecentlyDone()
@@ -218,23 +267,24 @@ function Scan.OnReplicate()
     end
     Scan.index = last + 1
     if Scan.index < Scan.total then
-      C_Timer.After(0, chunk)
+      C_Timer.After(0, guarded("scan (lecture)", chunk))
     else
       -- relecture des objets pas encore chargés
-      C_Timer.After(2, function()
+      C_Timer.After(2, guarded("scan (relecture)", function()
         if not Scan.running then return end
+        local still = {}
         for _, i in ipairs(Scan.pending) do
           local info = { C_AuctionHouse.GetReplicateItemInfo(i) }
           local tl = C_AuctionHouse.GetReplicateItemTimeLeft(i)
           local r = rowFromInfo(info, tl and tl + 1)
-          if r then Scan.rows[#Scan.rows + 1] = r end
+          if r then Scan.rows[#Scan.rows + 1] = r else still[#still + 1] = i end
         end
-        Scan.pending = {}
+        Scan.pending = still -- lignes toujours illisibles : comptées par Scan.Finish
         Scan.Finish()
-      end)
+      end))
     end
   end
-  chunk()
+  guarded("scan (lecture)", chunk)()
 end
 
 function Scan.Unmute()
@@ -249,6 +299,7 @@ function Scan.Abort(reason)
   ns.off("AUCTION_ITEM_LIST_UPDATE", Scan.OnListUpdate)
   Scan.rows, Scan.pending = nil, nil
   ns.print("Scan interrompu : " .. reason)
+  if ns.UI then ns.UI.OnData() end -- le bouton « Scan en cours… » redevient « Scanner l'HV »
 end
 
 -- Construit l'agrégat par objet + les signatures d'enchères pour le diff
@@ -280,49 +331,164 @@ function Scan.Aggregate(rows)
   return items, sigs
 end
 
--- Compare avec le scan précédent.
--- Renvoie par objet : unités disparues classées en
---   sold  : avaient au moins 2 h restantes ET l'écart entre scans est plus court → vendues (ou annulées)
---   exp   : étaient en "court" → très probablement expirées
---   amb   : cas ambigus
+-- Temps restant possible (secondes) selon la tranche affichée par le jeu, pour des enchères de 12, 24 ou 48 h
+local TL_RANGE = { [1] = { 0, 1800 }, [2] = { 1800, 7200 }, [3] = { 7200, 43200 }, [4] = { 43200, 172800 } }
+
+-- Chance qu'une enchère vue dans la tranche tl ait expiré pendant gap secondes (temps restant supposé
+-- uniforme dans la tranche). nil si la tranche est inconnue.
+function Scan.ExpireOdds(tl, gap)
+  local r = TL_RANGE[tl]
+  if not r then return nil end
+  if gap <= r[1] then return 0 end
+  if gap >= r[2] then return 1 end
+  return (gap - r[1]) / (r[2] - r[1])
+end
+
+-- Compare avec le scan précédent. Renvoie par objet les unités disparues, classées en :
+--   sold : parties avant de pouvoir expirer (le temps restant dépassait l'écart entre les scans) → achetées
+--   exp  : expirées (en partie estimé : une enchère qui pouvait expirer compte pour sa chance d'avoir expiré)
+--   amb  : le reste des disparitions incertaines (achetée ou annulée, on ne sait pas)
+--   can  : annulées, pas achetées (voir plus bas)
 -- et posted : nouvelles unités apparues.
-function Scan.Diff(prevSigs, sigs, gap)
+--
+-- Objets qui s'empilent (tissu, cuir, minerai…) : un acheteur prend toujours le moins cher d'abord.
+--  * Une enchère qui disparaît alors qu'une enchère moins chère, déjà là au scan précédent, est toujours
+--    en vente n'a pas été achetée : c'est une annulation (souvent pour se remettre en vente plus bas).
+--    Sans ce filtre, les relistes comptaient comme des ventes (Runecloth « 5 459 vendus/j ») et
+--    gonflaient le prix réel (tes ventes réelles étaient 7 à 50 % plus basses).
+--  * Un achat partiel réduit la pile : la même enchère réapparaît au même prix unitaire avec moins
+--    d'unités. On compte la différence, pas la pile entière vendue plus une nouvelle pile.
+-- Équipement (une même fiche d'objet regroupe plusieurs suffixes « of the Monkey »…) : l'acheteur
+-- choisit, le filtre ne s'applique pas.
+--
+-- b.ev (journal du marché, Market.Record) : les enchères au sort sûr, une par groupe disparu :
+-- { sold = true/false, unit, n (unités), life (heures en rayon, si on l'a vue arriver) }.
+-- now (facultatif) sert à dater leur départ : au milieu de l'écart entre les deux scans.
+function Scan.Diff(prevSigs, sigs, gap, now)
   local out = {}
   local function bucket(id)
     local b = out[id]
-    if not b then b = { sold = 0, exp = 0, amb = 0, posted = 0, soldVal = 0 }; out[id] = b end
+    if not b then b = { sold = 0, exp = 0, amb = 0, can = 0, posted = 0, soldVal = 0 }; out[id] = b end
     return b
   end
+  local function parse(sig)
+    local id, count, buyout = sig:match("^(%d+):(%d+):(%d+):")
+    id, count, buyout = tonumber(id), tonumber(count), tonumber(buyout)
+    return id, count, buyout, buyout > 0 and math.floor(buyout / count) or nil
+  end
+
+  -- par objet : enchères disparues, unités postées et unités restées, par prix unitaire
+  local items = {}
+  local function item(id)
+    local it = items[id]
+    if not it then it = { gone = {}, posted = {}, stay = {}, stack = false }; items[id] = it end
+    return it
+  end
   for sig, prev in pairs(prevSigs) do
+    local id, count, buyout, unit = parse(sig)
+    local it = item(id)
+    if count > 1 then it.stack = true end
     local cur = sigs[sig]
+    local kept = math.min(prev.c, cur and cur.c or 0)
+    if kept > 0 and unit then it.stay[unit] = (it.stay[unit] or 0) + kept * count end
     local gone = prev.c - (cur and cur.c or 0)
     if gone > 0 then
-      local id, count, buyout = sig:match("^(%d+):(%d+):(%d+):")
-      id, count, buyout = tonumber(id), tonumber(count), tonumber(buyout)
-      local units = gone * count
-      local b = bucket(id)
-      if prev.tl == 0 then
-        b.amb = b.amb + units -- temps restant inconnu
-      elseif prev.tl <= 1 then
-        b.exp = b.exp + units
-      elseif TL_MIN_SECONDS[prev.tl] and gap < TL_MIN_SECONDS[prev.tl] and buyout > 0 then
-        b.sold = b.sold + units
-        b.soldVal = b.soldVal + gone * buyout
-      else
-        b.amb = b.amb + units
-      end
+      it.gone[#it.gone + 1] = { units = gone * count, unit = unit, tl = prev.tl or 0, buyout = buyout, f = prev.f }
     end
   end
   for sig, cur in pairs(sigs) do
+    local id, count, _, unit = parse(sig)
+    local it = item(id)
+    if count > 1 then it.stack = true end
     local prev = prevSigs[sig]
     local added = cur.c - (prev and prev.c or 0)
     if added > 0 then
-      local id, count = sig:match("^(%d+):(%d+):")
-      local b = bucket(tonumber(id))
-      b.posted = b.posted + added * tonumber(count)
+      local k = unit or -1
+      it.posted[k] = (it.posted[k] or 0) + added * count
     end
   end
+
+  for id, it in pairs(items) do
+    local b = bucket(id)
+    local cheapestStay
+    if it.stack then
+      -- achat partiel ou remise au même prix : disparu et réapparu au même prix unitaire = même stock
+      for _, g in ipairs(it.gone) do
+        local back = g.unit and it.posted[g.unit]
+        if back and back > 0 then
+          local m = math.min(back, g.units)
+          g.units, it.posted[g.unit] = g.units - m, back - m
+          it.stay[g.unit] = (it.stay[g.unit] or 0) + m
+        end
+      end
+      for unit, q in pairs(it.stay) do
+        if q > 0 and (not cheapestStay or unit < cheapestStay) then cheapestStay = unit end
+      end
+    end
+    local function event(g, sold)
+      if not g.unit then return end
+      local life
+      if now and g.f then life = math.max(0, (now - gap / 2 - g.f) / 3600) end
+      b.ev = b.ev or {}
+      b.ev[#b.ev + 1] = { sold = sold, unit = g.unit, n = g.units, life = life }
+    end
+    for _, g in ipairs(it.gone) do
+      if g.units > 0 then
+        local p = Scan.ExpireOdds(g.tl, gap)
+        if p == nil then
+          b.amb = b.amb + g.units                      -- temps restant inconnu
+        elseif p >= 1 then
+          b.exp = b.exp + g.units
+          event(g, false)
+        elseif cheapestStay and g.unit and g.unit > cheapestStay then
+          b.exp = b.exp + g.units * p                  -- moins cher resté en vente : pas acheté
+          b.can = b.can + g.units * (1 - p)
+        elseif p <= 0 and g.unit then
+          b.sold = b.sold + g.units
+          b.soldVal = b.soldVal + g.units * g.unit
+          event(g, true)
+        else
+          b.exp = b.exp + g.units * p
+          b.amb = b.amb + g.units * (1 - p)
+        end
+      end
+    end
+    for _, q in pairs(it.posted) do b.posted = b.posted + q end
+    -- l'historique stocke des entiers
+    b.exp, b.amb, b.can = math.floor(b.exp + 0.5), math.floor(b.amb + 0.5), math.floor(b.can + 0.5)
+    if b.sold == 0 and b.exp == 0 and b.amb == 0 and b.can == 0 and b.posted == 0 then out[id] = nil end
+  end
   return out
+end
+
+-- Taille habituelle d'un scan complet : médiane des derniers scans acceptés (nil sous 2 scans)
+function Scan.UsualSize(db)
+  local sizes = {}
+  for _, n in ipairs(db.scanSizes or {}) do sizes[#sizes + 1] = n end
+  if #sizes < 2 then
+    -- juste après la mise à jour : les tailles des scans enregistrés avant (sans le plus récent,
+    -- déjà compté dans scanSizes s'il y est)
+    local skip = #sizes
+    for i = #(db.scans or {}) - skip, math.max(1, #(db.scans or {}) - Scan.SIZE_REF + 1), -1 do
+      local n = db.scans[i].total
+      if n and n > 0 then sizes[#sizes + 1] = n end
+    end
+  end
+  if #sizes < 2 then return nil end
+  table.sort(sizes)
+  local m = (#sizes + 1) / 2
+  return (sizes[math.floor(m)] + sizes[math.ceil(m)]) / 2
+end
+
+function Scan.IsTruncated(db, n)
+  local usual = Scan.UsualSize(db)
+  return usual ~= nil and n < usual * Scan.COMPLETE_SHARE, usual
+end
+
+local function rememberSize(db, n)
+  db.scanSizes = db.scanSizes or {}
+  table.insert(db.scanSizes, n)
+  while #db.scanSizes > Scan.SIZE_REF do table.remove(db.scanSizes, 1) end
 end
 
 function Scan.Finish()
@@ -334,16 +500,88 @@ function Scan.Finish()
   local db = ns.realmDB()
   local now = time()
 
+  -- liste reçue en partie : on n'en garde rien (prix, ventes, carnet d'ordres restent ceux d'avant)
+  local truncated, usual = Scan.IsTruncated(db, #rows)
+  local run = db.rejectRun
+  if truncated then
+    if run and math.abs(#rows - run.size) <= run.size * Scan.SAME_SIZE then
+      run.count, run.size = run.count + 1, (run.size * run.count + #rows) / (run.count + 1)
+    else
+      run = { count = 1, size = #rows }
+    end
+    db.rejectRun = run
+    if run.count >= Scan.ACCEPT_AFTER then
+      truncated, usual = false, nil -- nouvelle référence : ce scan n'est pas « partiel » non plus
+      -- la taille de la série devient la référence (avec ce scan : 2 valeurs, pas de repli sur les
+      -- anciens totaux de db.scans qui ramèneraient l'ancienne taille)
+      -- et il n'est pas comparé au dernier grand scan : ses enchères absentes passeraient pour des ventes
+      db.scanSizes, db.rejectRun, db.lastSigs = { math.floor(run.size) }, nil, nil
+      ns.print(("%d scans de suite à ~%d enchères : le marché a rétréci, ce scan est gardé."):format(run.count, run.size))
+    end
+  else
+    db.rejectRun = nil
+  end
+  if truncated then
+    Scan.pending = nil
+    db.rejected = { t = now, n = #rows, usual = math.floor(usual), src = Scan.source }
+    ns.print(("|cffff9900Scan incomplet ignoré|r : %d enchères lues au lieu de ~%d d'habitude. Les prix restent ceux du scan précédent ; relance un scan complet."):format(#rows, usual))
+    if ns.UI then ns.UI.OnData() end
+    return
+  end
+  -- Scan partiel : sa taille n'entre pas dans la référence (sinon, après quelques scans partiels, la
+  -- médiane baisse et les suivants ne sont plus repérés). Plusieurs de suite de taille voisine : le
+  -- marché a vraiment rétréci, cette taille devient la référence.
+  local half = usual and #rows < usual * Scan.DIFF_SHARE
+  if half then
+    local pr = db.partialRun
+    if pr and math.abs(#rows - pr.size) <= pr.size * Scan.SAME_SIZE then
+      pr.count, pr.size = pr.count + 1, (pr.size * pr.count + #rows) / (pr.count + 1)
+    else
+      pr = { count = 1, size = #rows }
+    end
+    db.partialRun = pr
+    if pr.count >= Scan.ACCEPT_AFTER then
+      db.scanSizes, db.partialRun = { math.floor(pr.size) }, nil
+      rememberSize(db, #rows)
+      ns.print(("%d scans de suite à ~%d enchères : le marché a rétréci, c'est la nouvelle taille de référence."):format(pr.count, pr.size))
+    end
+  else
+    db.partialRun = nil
+    rememberSize(db, #rows)
+  end
+
   local items, sigs = Scan.Aggregate(rows)
   local gap = db.lastScanTime and (now - db.lastScanTime) or nil
   local diff
-  if db.lastSigs and gap and gap <= MAX_DIFF_GAP then
-    diff = Scan.Diff(db.lastSigs, sigs, gap)
+  local missing = #(Scan.pending or {})
+  local holes = missing > math.max(20, (#rows + missing) * Scan.MISSING_SHARE)
+  if half or holes then
+    db.partial = { t = now, n = #rows, usual = usual and math.floor(usual), missing = missing, src = Scan.source }
+    ns.print(("|cffff9900Scan partiel|r (%s) : prix mis à jour, mais pas de ventes comptées pour ce scan."):format(
+      half and ("%d enchères au lieu de ~%d"):format(#rows, usual) or ("%d lignes illisibles"):format(missing)))
+  elseif db.lastSigs and gap and gap <= MAX_DIFF_GAP then
+    diff = Scan.Diff(db.lastSigs, sigs, gap, now)
+  end
+  -- Arrivée de chaque enchère (temps en rayon, journal du marché) : déjà vue, on garde la date ;
+  -- nouvelle depuis un scan comparable, elle est arrivée entre les deux (on prend le milieu) ;
+  -- sinon on ne sait pas.
+  for sig, cur in pairs(sigs) do
+    local prev = db.lastSigs and db.lastSigs[sig]
+    if prev then cur.f = prev.f
+    elseif diff then cur.f = math.floor(now - gap / 2) end
+  end
+  if diff and ns.Market then
+    for id, b in pairs(diff) do
+      if b.ev then ns.safe("journal du marché", ns.Market.Record, db, id, b.ev, now) end
+      b.ev = nil
+    end
+    ns.safe("journal du marché", ns.Market.Prune, db, now)
   end
 
   -- Format compact par objet : "nb,qté,min,p25,médiane,vendu,expiré,ambigu,posté,valeurVendue"
   local packed, stats = {}, {}
   db.lastMin = {} -- prix d'achat le plus bas à l'unité, au dernier scan
+  db.book = {}    -- carnet d'ordres du dernier scan (onglet Flip HV, concurrence)
   local ids = {}
   for id in pairs(items) do ids[id] = true end
   if diff then for id in pairs(diff) do ids[id] = true end end
@@ -354,13 +592,18 @@ function Scan.Finish()
     if minP > 0 then db.lastMin[id] = minP end
     local d = diff and diff[id]
     local med = weightedPercentile(it.prices, 0.5)
-    if items[id] then stats[id] = { med = med, q = it.q } end
-    -- structure du marché : nombre de vendeurs et part du plus gros (en ‰ des unités)
+    if items[id] then stats[id] = { med = med, q = it.q, min = minP } end
+    -- structure du marché : nombre de vendeurs et part du plus gros (en ‰ des unités).
+    -- Forever ne transmet pas le nom des vendeurs (comme le Retail moderne) : vendeur inconnu
+    -- = non compté, et 0 vendeur connu = structure du marché inconnue.
     local sellers, top = 0, 0
-    for _, q in pairs(it.owners or {}) do
-      sellers = sellers + 1
-      if q > top then top = q end
+    for owner, q in pairs(it.owners or {}) do
+      if owner ~= "?" and owner ~= "" then
+        sellers = sellers + 1
+        if q > top then top = q end
+      end
     end
+    if items[id] and it.q > 0 then db.book[id] = Scan.PackBook(it.prices, sellers, math.floor(top * 1000 / it.q)) end
     packed[id] = table.concat({
       it.n, it.q, minP,
       weightedPercentile(it.prices, 0.25),
@@ -370,9 +613,11 @@ function Scan.Finish()
       weightedPercentile(it.prices, 0.75),
       sellers,
       it.q > 0 and math.floor(top * 1000 / it.q) or 0,
+      d and d.can or 0,
     }, ",")
   end
 
+  if ns.Undercut then ns.safe("sous-cotes", ns.Undercut.ObserveScan, db.lastMin, now) end
   ns.History.Record(db, now, stats, diff, diff and gap or nil)
   ns.History.RecordRecent(db, now, stats)
   ns.Snipe.FromScan(rows, now)
@@ -398,8 +643,84 @@ function Scan.Finish()
   ns.print(("Scan %sterminé : %d enchères lues%s. /ahl pour voir le classement.")
     :format(Scan.source == "Auctionator" and "Auctionator " or "", #rows, diff and (", comparées au scan d'il y a " .. math.floor(gap / 60) .. " min") or ""))
   if ns.UI then ns.UI.OnData() end
+  if ns.Export then ns.safe("rapport", ns.Export.Save) end -- toujours à jour dans les SavedVariables
 end
 
 ns.on("AUCTION_HOUSE_CLOSED", function()
   if Scan.running then Scan.Abort("HV fermé") end
 end)
+
+-- Réparation des scans tronqués enregistrés avant ce garde-fou : on retire de l'historique ce que
+-- chacun y a ajouté (ses champs gardés dans db.scans), puis le scan lui-même. Si c'était le dernier,
+-- les prix du jour reviennent au scan précédent (sans son carnet d'ordres, pas gardé) et le prochain
+-- scan n'est pas comparé à lui. Les retraits « annulés » ne sont gardés par scan que depuis ce
+-- garde-fou (14e champ) : ceux des scans plus anciens restent comptés.
+local function sub0(a, b) return math.max(0, (a or 0) - (b or 0)) end
+function Scan.UndoScan(db, i)
+  local sc = db.scans[i]
+  local H = ns.History
+  local day = H.today(sc.t)
+  local dayRec = db.days and db.days[day]
+  if dayRec then
+    dayRec.scans = sub0(dayRec.scans, 1)
+    if sc.gap then dayRec.obs, dayRec.o9 = sub0(dayRec.obs, sc.gap), dayRec.o9 and sub0(dayRec.o9, sc.gap) end
+  end
+  for id, rest in tostring(sc.items or ""):gmatch("(%d+)=([^;]*)") do
+    id = tonumber(id)
+    local f = {}
+    for v in rest:gmatch("[^,]+") do f[#f + 1] = tonumber(v) or 0 end
+    local q, minP, med, sold, exp, amb, soldVal, can = f[2], f[3], f[5], f[6], f[7], f[8], f[10], f[14]
+    local h = db.hist and db.hist[id]
+    local r = h and H.parse(h[day])
+    if r then
+      if med and med > 0 and r.pN > 0 then
+        r.pSum, r.pN = sub0(r.pSum, med), r.pN - 1
+        if r.mSum then r.mSum = sub0(r.mSum, minP and minP > 0 and minP or med) end
+      end
+      r.qSum, r.sold, r.amb = sub0(r.qSum, q), sub0(r.sold, sold), sub0(r.amb, amb)
+      r.soldVal, r.exp = sub0(r.soldVal, soldVal), sub0(r.exp, exp)
+      if can then r.can = sub0(r.can, can) end
+      h[day] = H.Pack(r)
+    end
+    local str = db.recent and db.recent[id]
+    if str then db.recent[id] = str:gsub(sc.t .. ",%d+,%d+;", "") end
+  end
+  local wasLast = db.lastScanTime == sc.t
+  table.remove(db.scans, i)
+  if wasLast then
+    local prev = db.scans[#db.scans]
+    db.lastSigs, db.book, db.lastMin, db.snipes = nil, {}, {}, nil
+    db.lastScanTime = prev and prev.t or nil
+    for id, rest in tostring(prev and prev.items or ""):gmatch("(%d+)=([^;]*)") do
+      local minP = tonumber(rest:match("^%d+,%d+,(%d+)"))
+      if minP and minP > 0 then db.lastMin[tonumber(id)] = minP end
+    end
+  end
+end
+
+function Scan.Repair(db)
+  db = db or ns.realmDB()
+  local fixed = 0
+  local i = 2
+  while db.scans and i <= #db.scans do
+    local sc = db.scans[i]
+    local sizes = {}
+    for j = i - 1, math.max(1, i - Scan.SIZE_REF), -1 do
+      if db.scans[j].total and db.scans[j].total > 0 then sizes[#sizes + 1] = db.scans[j].total end
+    end
+    table.sort(sizes)
+    local usual = #sizes >= 2 and (sizes[math.floor((#sizes + 1) / 2)] + sizes[math.ceil((#sizes + 1) / 2)]) / 2
+    if usual and sc.total and sc.total < usual * Scan.COMPLETE_SHARE then
+      Scan.UndoScan(db, i)
+      fixed = fixed + 1
+    else
+      i = i + 1
+    end
+  end
+  if fixed > 0 then
+    ns.dataVersion = (ns.dataVersion or 0) + 1
+    ns.print(("%d scan(s) incomplet(s) retiré(s) de l'historique : les prix et les ventes qu'ils faussaient sont corrigés."):format(fixed))
+  end
+  return fixed
+end
+ns.on("PLAYER_LOGIN", function() ns.safe("réparation des scans", Scan.Repair) end)
