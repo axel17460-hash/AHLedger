@@ -29,6 +29,7 @@ Sell.DEFAULT_RULES = {
   minProfit = 0.10,       -- plancher : coût d'achat connu (courriers) + 10 %
   floorPct = 0.70,        -- plancher : 70 % du prix réel de vente
   floorFixed = false,     -- plancher fixé à la main, en cuivre/u
+  fixedPrice = false,     -- prix fixé à la main (cuivre/u) : remplace palier − undercut et le plafond, mais pas le plancher
   ceilMult = 1.2,         -- plafond : 1,2 × le prix réel de vente (évite de poster sur un pic)
   stackSize = false,      -- unités par mise en vente (false : tout le conseillé d'un coup)
   stacks = false,         -- nombre de mises en vente voulues (avec stackSize : total voulu = taille × nombre)
@@ -245,7 +246,11 @@ function Sell.Quote(id, opts)
   local mult = rules.ceilMult
   if mult and sig["pénurie"] then mult = mult + 0.2 end
   q.ceil = (mult and s and s.price) and math.floor(s.price * mult) or nil
-  if q.ceil and price > q.ceil then price, q.capped = q.ceil, true end
+  if rules.fixedPrice then
+    price, q.fixed = math.max(1, math.floor(rules.fixedPrice)), true -- ton prix : ni undercut ni plafond, le plancher reste
+  elseif q.ceil and price > q.ceil then
+    price, q.capped = q.ceil, true
+  end
 
   q.tier, q.step = tier, step
   if price < floor then
@@ -266,7 +271,9 @@ function Sell.Quote(id, opts)
 
   -- Raison, en clair
   local parts = {}
-  if q.noCompetition then
+  if q.fixed then
+    parts[#parts + 1] = "prix fixé"
+  elseif q.noCompetition then
     parts[#parts + 1] = "rayon vide : prix habituel"
   else
     parts[#parts + 1] = ("palier %s − %s"):format(plain(ns.money(tier)), plain(ns.money(step)))
@@ -529,7 +536,21 @@ end
 
 local DURATION_CODE = { [12] = 1, [24] = 2, [48] = 3 }
 
-Sell.session = { posted = 0, net = 0, cancelled = 0 }
+Sell.session = { posted = 0, net = 0, cancelled = 0, start = time() }
+
+-- Ventes réellement encaissées depuis le début de la session, d'après les courriers d'HV lus (Ledger) :
+-- il faut ouvrir la boîte aux lettres pour qu'elles apparaissent. { units, gross, cut, net }
+function Sell.SessionSold()
+  local r = { units = 0, gross = 0, cut = 0, net = 0 }
+  if not (ns.Ledger and ns.Ledger.DB) then return r end
+  for _, e in ipairs(ns.Ledger.DB().ledger or {}) do
+    if e.k == "sold" and e.t and e.t >= Sell.session.start then
+      r.units, r.gross, r.cut = r.units + (e.c or 0), r.gross + (e.g or 0), r.cut + (e.cut or 0)
+    end
+  end
+  r.net = r.gross - r.cut
+  return r
+end
 
 -- Garde-fous : on ne poste jamais sous le plancher ni sous le rachat PNJ (net de commission), ni plus
 -- de 3 fois au-dessus du prix réel : une erreur de calcul ne doit pas coûter d'or.
@@ -637,8 +658,14 @@ function AHLedger_CancelNext() ns.safe("annuler suivante", Sell.CancelNext) end
 -- Texte de session pour le pied de page
 function Sell.SessionText()
   local s = Sell.session
-  return ("session : %d posée%s (~%s net), %d annulée%s"):format(
+  local text = ("session : %d posée%s (~%s net), %d annulée%s"):format(
     s.posted, s.posted > 1 and "s" or "", plain(ns.money(s.net)), s.cancelled, s.cancelled > 1 and "s" or "")
+  local sold = Sell.SessionSold()
+  if sold.units > 0 then
+    text = text .. (" · encaissé %d u., commission %s, net %s"):format(
+      sold.units, plain(ns.money(sold.cut)), plain(ns.money(sold.net)))
+  end
+  return text
 end
 
 ------------------------------------------------------------------------
@@ -648,7 +675,7 @@ end
 local KEY_ALIAS = {
   undercut = "undercut", plancher = "floorPct", plafond = "ceilMult", marge = "vendorMargin", profit = "minProfit",
   pile = "stackSize", piles = "stacks", duree = "duration", ["durée"] = "duration", sous = "belowFloor",
-  fixe = "floorFixed",
+  fixe = "floorFixed", prix = "fixedPrice",
 }
 local BELOW_ALIAS = { garder = "keep", keep = "keep", pnj = "vendor", vendor = "vendor", attendre = "wait", wait = "wait" }
 
@@ -671,7 +698,7 @@ local function parseValue(key, text)
     return n and math.floor(n) or nil
   elseif key == "belowFloor" then
     return BELOW_ALIAS[low]
-  elseif key == "floorFixed" then
+  elseif key == "floorFixed" or key == "fixedPrice" then
     return Sell.ParseMoney(low)
   end
 end
@@ -720,13 +747,19 @@ function Sell.Command(rest)
     local key, val = args:match("^(%S+)%s+(.+)$")
     local k = key and KEY_ALIAS[key:lower()]
     if not k then
-      ns.print("Clés : undercut (1c ou 2%), plancher (70%), marge, profit, plafond (1.2), pile, piles, duree (12/24/48), sous (garder/pnj/attendre), fixe. « off » retire la règle.")
+      ns.print("Clés : undercut (1c ou 2%), plancher (70%), marge, profit, plafond (1.2), pile, piles, duree (12/24/48), sous (garder/pnj/attendre), fixe (plancher fixé), prix (prix fixé). « off » retire la règle.")
       return
     end
     local value, clear = parseValue(k, val)
     if value == nil and not clear then ns.print("Valeur illisible : " .. val) return end
     local ok, err = Sell.SetRule(scope, target, k, value)
     if ok then ns.print("Règle enregistrée. " .. (scope == "default" and describe(Sell.Rules(0)) or "")) else ns.print(err) end
+  elseif sub == "prix" then
+    -- /ahl vendre prix <lien ou id> <prix> : prix fixé pour cet objet (« off » pour l'enlever)
+    local t, tail = args:match("item:(%d+)"), args:match("|h|r%s+(.*)$")
+    if not (t and tail) then t, tail = args:match("^(%d+)%s+(.*)$") end
+    if not t then ns.print("Syntaxe : /ahl vendre prix <lien ou id de l'objet> <prix, ex. 5g 20s> | off") return end
+    Sell.Command("regle objet " .. t .. " prix " .. tail)
   elseif sub == "undercuts" then
     local list = Sell.Undercuts()
     if #list == 0 then ns.print("Aucune de tes enchères n'est battue (d'après le dernier scan).") return end
@@ -736,6 +769,6 @@ function Sell.Command(rest)
         g.newPrice and ("nouveau prix " .. ns.money(g.newPrice)) or ("moins cher " .. ns.money(g.low))))
     end
   else
-    ns.print("/ahl vendre [file] | regles | regle [objet <id>|cat <n>] <clé> <valeur> | undercuts")
+    ns.print("/ahl vendre [file] | regles | regle [objet <id>|cat <n>] <clé> <valeur> | prix <objet> <prix> | undercuts")
   end
 end

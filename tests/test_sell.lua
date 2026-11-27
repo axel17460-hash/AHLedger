@@ -119,6 +119,14 @@ Sell.SetRule("item", 1, "duration", nil)
 Sell.SetRule("item", 1, "floorFixed", 600)
 check("plancher fixé", q1().floor == 600 and q1().status == "plancher")
 Sell.SetRule("item", 1, "floorFixed", nil)
+-- prix fixé : ni undercut ni plafond, mais le plancher reste
+Sell.SetRule("item", 1, "fixedPrice", 650)
+local fx = q1()
+check("prix fixé : au-dessus du plafond, accepté", fx.status == "ok" and fx.price == 650 and fx.fixed and fx.reason:find("prix fix") ~= nil, fx.price)
+Sell.SetRule("item", 1, "fixedPrice", 300)
+check("prix fixé sous le plancher : refusé (plancher)", q1().status == "plancher", q1().status)
+Sell.SetRule("item", 1, "fixedPrice", nil)
+check("prix fixé retiré", q1().price == 499)
 -- plancher : coût d'achat connu + marge (courriers d'HV)
 ns.Ledger.DB().ledger[#ns.Ledger.DB().ledger + 1] = { id = 1, k = "bought", c = 10, g = 4000, t = time() }
 ns.dataVersion = (ns.dataVersion or 0) + 1
@@ -300,6 +308,12 @@ cmd("regle duree off")
 cmd("regle pile 4")
 check("règle pile", Sell.Rules(1).stackSize == 4)
 cmd("regle pile off")
+cmd("prix |cffffffff|Hitem:1::::|h[Alpha Item]|h|r 6g 50s")
+check("/ahl vendre prix par lien", Sell.DB().item[1] and Sell.DB().item[1].fixedPrice == 65000, Sell.DB().item[1] and Sell.DB().item[1].fixedPrice)
+cmd("prix 1 off")
+check("/ahl vendre prix off", Sell.Rules(1).fixedPrice == nil)
+cmd("prix")
+check("prix sans argument : aide", lastLog(1):find("Syntaxe") ~= nil)
 cmd("regle bidon 3")
 check("clé inconnue : aide", lastLog(1):find("Clés") ~= nil)
 setAuctions({})
@@ -310,6 +324,21 @@ check("/ahl vendre regles", lastLog(3):find("undercut") ~= nil)
 cmd("undercuts")
 cmd("")
 Sell.DB().cat[7] = nil
+
+------------------------------------------------------------------------
+-- Session : ventes encaissées d'après les courriers
+------------------------------------------------------------------------
+local before = Sell.SessionSold()
+check("session : rien d'encaissé au départ", before.units == 0 and before.net == 0)
+local L = ns.Ledger.DB().ledger
+L[#L + 1] = { id = 1, k = "sold", c = 10, g = 5000, cut = 250, t = time() + 5 }
+L[#L + 1] = { id = 2, k = "sold", c = 4, g = 800, cut = 40, t = time() + 6 }
+L[#L + 1] = { id = 1, k = "sold", c = 99, g = 99999, cut = 99, t = Sell.session.start - 100 } -- avant la session
+L[#L + 1] = { id = 1, k = "bought", c = 5, g = 700, t = time() + 7 }                         -- un achat, pas une vente
+local ss = Sell.SessionSold()
+check("session : ventes depuis le début seulement", ss.units == 14 and ss.gross == 5800 and ss.cut == 290 and ss.net == 5510, ss.units .. "/" .. ss.gross .. "/" .. ss.net)
+check("session : texte au pied de page", plain(Sell.SessionText()):find("encaissé 14 u., commission 2s 90c, net 55s 10c") ~= nil, plain(Sell.SessionText()))
+ns.Ledger.DB().ledger = {}
 
 ------------------------------------------------------------------------
 -- Interface : vues Mes objets → file de vente → undercuts
