@@ -27,6 +27,7 @@ Sell.DEFAULT_RULES = {
   undercutCopper = 1,     -- 1 c sous le moins cher qui n'est pas à toi
   vendorMargin = 0.10,    -- plancher : rachat PNJ + 10 % (commission déduite)
   minProfit = 0.10,       -- plancher : coût d'achat connu (courriers) + 10 %
+  farmCost = 1,           -- plancher : coût d'opportunité d'un objet farmé (Farm.UnitCost) × ce coefficient ; false = ignoré
   floorPct = 0.70,        -- plancher : 70 % du prix réel de vente
   floorFixed = false,     -- plancher fixé à la main, en cuivre/u
   fixedPrice = false,     -- prix fixé à la main (cuivre/u) : remplace palier − undercut et le plafond, mais pas le plancher
@@ -123,7 +124,8 @@ function Sell.Cost(id)
   return costCache[id]
 end
 
--- Plancher à l'unité : le plus grand de PNJ + marge, coût d'achat + marge, X % du prix réel, plancher fixé.
+-- Plancher à l'unité : le plus grand de PNJ + marge, coût d'achat + marge, coût de farm, X % du prix réel,
+-- plancher fixé.
 -- Renvoie le prix et ce qui le fixe.
 function Sell.Floor(id, s, rules)
   local best, why = 0, nil
@@ -133,6 +135,9 @@ function Sell.Floor(id, s, rules)
   if vendor > 0 then consider(vendor * (1 + (rules.vendorMargin or 0)) / (1 - cut()), "PNJ + marge") end
   local cost = Sell.Cost(id)
   if cost then consider(cost * (1 + (rules.minProfit or 0)) / (1 - cut()), "coût d'achat + marge") end
+  -- objet farmé : le temps passé à le looter vaut ton or/h de farm habituel (commission déduite, sans marge)
+  local farm = rules.farmCost and ns.Farm and ns.Farm.UnitCost and ns.Farm.UnitCost(id)
+  if farm and farm > 0 then consider(farm * rules.farmCost / (1 - cut()), "coût de farm") end
   if s and s.price and rules.floorPct then
     consider(s.price * rules.floorPct, ("%.0f %% du prix réel"):format(rules.floorPct * 100))
   end
@@ -298,7 +303,10 @@ Sell.ACTION_LABEL = ACTION_LABEL
 
 -- Une ligne de la file : { id, have, qty, price, status, net, reason, duration, ... }.
 -- adv : le conseil des sacs (Bags.Advise) — la file ne reprend que les objets à vendre à l'HV.
-function Sell.Plan(id, have, adv)
+-- opts.bank : ligne des exemplaires de la banque (non postable : à retirer d'abord) ;
+-- opts.covered : unités déjà prévues par la ligne des sacs, déduites de la quantité visée.
+function Sell.Plan(id, have, adv, opts)
+  opts = opts or {}
   local q = Sell.Quote(id)
   if not q then return nil end
   local r = q.rules
@@ -306,7 +314,7 @@ function Sell.Plan(id, have, adv)
   local planned = adv and adv.postQty or have
   if r.stackSize and r.stacks then planned = r.stackSize * r.stacks end -- « piles » ne joue qu'avec « pile »
   local listed = Sell.Listed(id)
-  planned = math.min(have, planned - listed) -- ne pas inonder : ce qui est déjà en vente compte
+  planned = math.min(have, planned - listed - (opts.covered or 0)) -- ne pas inonder : ce qui est déjà en vente compte
   if planned < 1 then return nil end
   local qty = math.min(planned, r.stackSize or planned)
   local e = { id = id, have = have, qty = qty, planned = planned, listed = listed, q = q, s = q.s,
@@ -314,7 +322,13 @@ function Sell.Plan(id, have, adv)
               reason = q.reason, reset = q.reset }
   local shown = q.price or q.wouldPost or 0
   e.net = shown * qty * (1 - cut())
-  if q.status == "ok" then
+  if opts.bank then
+    -- en banque : on montre ce qu'il rapporterait, sans pouvoir le poster d'ici
+    e.bank, e.where = true, "banque"
+    e.action = "Retirer"
+    e.reason = "en banque : à retirer d'abord · " .. e.reason
+    if q.status ~= "ok" then e.blocked = true; e.action = ACTION_LABEL[q.action] or q.action end
+  elseif q.status == "ok" then
     e.action = "Poster"
     local meta = AHLedgerDB.items and AHLedgerDB.items[id]
     if meta and (meta.c == 2 or meta.c == 4) then e.reason = e.reason .. " · équipement : vérifie la variante" end
@@ -331,21 +345,36 @@ end
 
 -- Les objets de tes sacs à vendre à l'HV, triés par gain attendu par clic (net de commission) :
 -- avec 5 minutes devant toi, les meilleurs partent d'abord. Les lignes bloquées (sous le plancher) suivent.
--- La banque n'est pas proposée : on ne poste que ce qui est dans les sacs.
+-- Si ta banque a été relue (ouverte une fois), ses objets à vendre apparaissent aussi, marqués « banque » :
+-- triés avec le reste pour voir ce qui vaut le détour, mais jamais postés (il faut d'abord les retirer).
+-- Un objet à la fois dans les sacs et en banque : la ligne « banque » ne vise que ce que les sacs ne couvrent pas.
 function Sell.Queue()
   local c = ns.Prof.Char()
   local out = {}
-  for id, n in pairs(c.bags or {}) do
-    local adv = ns.Bags.Advise(id, n)
+  local bags, bank = c.bags or {}, c.bank or {}
+  local ids = {}
+  for id in pairs(bags) do ids[id] = true end
+  for id in pairs(bank) do ids[id] = true end
+  for id in pairs(ids) do
+    local nb, nk = bags[id] or 0, bank[id] or 0
+    local adv = ns.Bags.Advise(id, nb + nk)
     if adv and adv.action == "Vendre HV" then
-      local e = Sell.Plan(id, n, adv)
-      if e then out[#out + 1] = e end
+      local covered = 0
+      if nb > 0 then
+        local e = Sell.Plan(id, nb, adv)
+        if e then out[#out + 1] = e; covered = e.planned end
+      end
+      if nk > 0 then
+        local e = Sell.Plan(id, nk, adv, { bank = true, covered = covered })
+        if e then out[#out + 1] = e end
+      end
     end
   end
   table.sort(out, function(a, b)
     if (a.blocked or false) ~= (b.blocked or false) then return not a.blocked end
     if a.net ~= b.net then return a.net > b.net end
-    return a.id < b.id
+    if a.id ~= b.id then return a.id < b.id end
+    return not a.bank and b.bank or false
   end)
   for i, e in ipairs(out) do e.order = i end -- l'interface trie sur ce rang par défaut
   return out
@@ -358,11 +387,11 @@ function Sell.Next(queue)
   local function recent(id) return Sell.last and Sell.last.id == id and time() - Sell.last.t < Sell.PIN_SECONDS end
   if Sell.pinned then
     for _, e in ipairs(queue) do
-      if e.id == Sell.pinned and not e.blocked and not recent(e.id) then return e end
+      if e.id == Sell.pinned and not e.blocked and not e.bank and not recent(e.id) then return e end
     end
   end
   for _, e in ipairs(queue) do
-    if not e.blocked and not recent(e.id) then return e end
+    if not e.blocked and not e.bank and not recent(e.id) then return e end
   end
 end
 
@@ -536,25 +565,104 @@ end
 
 local DURATION_CODE = { [12] = 1, [24] = 2, [48] = 3 }
 
-Sell.session = { posted = 0, net = 0, cancelled = 0, start = time() }
+-- Session de jeu : depuis le chargement de l'addon (connexion ou /reload).
+-- cancels : { {t, id, qty, dep} } annulations faites depuis AHLedger (dépôt perdu estimé).
+Sell.session = { posted = 0, net = 0, cancelled = 0, start = time(), cancels = {} }
 
--- Ventes réellement encaissées depuis le début de la session, d'après les courriers d'HV lus (Ledger) :
--- il faut ouvrir la boîte aux lettres pour qu'elles apparaissent. { units, gross, cut, net }
-function Sell.SessionSold()
-  local r = { units = 0, gross = 0, cut = 0, net = 0 }
-  if not (ns.Ledger and ns.Ledger.DB) then return r end
-  for _, e in ipairs(ns.Ledger.DB().ledger or {}) do
-    if e.k == "sold" and e.t and e.t >= Sell.session.start then
-      r.units, r.gross, r.cut = r.units + (e.c or 0), r.gross + (e.g or 0), r.cut + (e.cut or 0)
+-- Dépôt estimé à l'unité (même estimation que l'analyse : part du prix PNJ, calibrée par Ledger)
+function Sell.DepositPerUnit(id)
+  local s = ns.Analysis and ns.Analysis.Get(id)
+  if s and s.deposit then return s.deposit end
+  local meta = AHLedgerDB.items and AHLedgerDB.items[id]
+  return (meta and meta.s or 0) * (ns.Analysis and ns.Analysis.DEPOSIT_RATE or 0.15)
+end
+
+-- Résumé des ventes depuis `since` (secondes), d'après les courriers d'HV lus (Ledger) : il faut ouvrir la
+-- boîte aux lettres pour qu'une vente ou une expiration apparaisse, et elle compte au moment de la lecture.
+-- Dépôts perdus = enchères expirées (courriers) + annulations faites depuis AHLedger, au dépôt estimé ;
+-- le dépôt d'une enchère vendue est rendu, il ne compte pas.
+-- { since, secs, units, gross, cut, expired (unités), cancelled (enchères), depExpired, depCancel, depLost,
+--   net (= gross − cut − depLost), perHour }
+function Sell.SalesSummary(since)
+  since = since or Sell.session.start
+  local r = { since = since, secs = math.max(time() - since, 60), units = 0, gross = 0, cut = 0, expired = 0,
+              cancelled = 0, depExpired = 0, depCancel = 0 }
+  if ns.Ledger and ns.Ledger.DB then
+    for _, e in ipairs(ns.Ledger.DB().ledger or {}) do
+      if e.t and e.t >= since then
+        if e.k == "sold" then
+          r.units, r.gross, r.cut = r.units + (e.c or 0), r.gross + (e.g or 0), r.cut + (e.cut or 0)
+        elseif e.k == "expired" then
+          r.expired = r.expired + (e.c or 0)
+          if e.id then r.depExpired = r.depExpired + (e.c or 0) * Sell.DepositPerUnit(e.id) end
+        end
+      end
     end
   end
-  r.net = r.gross - r.cut
+  for _, c in ipairs(Sell.session.cancels or {}) do
+    if c.t >= since then r.cancelled, r.depCancel = r.cancelled + 1, r.depCancel + (c.dep or 0) end
+  end
+  r.depLost = r.depExpired + r.depCancel
+  r.net = r.gross - r.cut - r.depLost
+  r.perHour = r.net / (r.secs / 3600)
   return r
+end
+
+-- Ventes réellement encaissées depuis le début de la session de jeu. { units, gross, cut, net, depLost, … }
+function Sell.SessionSold() return Sell.SalesSummary(Sell.session.start) end
+
+-- « Farmer ou acheter ? » : ventes de la session de jeu, et pendant la session /ahl farm en cours, à côté de
+-- l'or/h du farm (loot valorisé + or ramassé) et de ton or/h de farm habituel (médiane de tes zones).
+-- { game = SalesSummary, farm = Farm.CurrentStats() ou nil, farmSales = SalesSummary depuis le début du farm,
+--   ref = or/h de référence ou nil }
+function Sell.FarmCompare()
+  local r = { game = Sell.SalesSummary(Sell.session.start) }
+  local F = ns.Farm
+  if F then
+    r.farm = F.CurrentStats and F.CurrentStats()
+    if r.farm then r.farmSales = Sell.SalesSummary(r.farm.start) end
+    r.ref = F.RefRate and F.RefRate()
+  end
+  return r
+end
+
+local function salesLine(t)
+  local m = function(v) return plain(ns.money(math.floor(v + 0.5))) end
+  local dep = ""
+  if t.depLost > 0 then
+    dep = (" − dépôts perdus %s (%d u. expirée%s, %d annulée%s)"):format(m(t.depLost), t.expired,
+      t.expired > 1 and "s" or "", t.cancelled, t.cancelled > 1 and "s" or "")
+  end
+  return ("vendu %d u. %s − commission %s%s = net %s (%s/h)"):format(t.units, m(t.gross), m(t.cut), dep,
+    m(t.net), m(math.max(t.perHour, 0)))
+end
+
+-- Textes de l'onglet Farm : court (pied de page) et complet (aide, entière au survol)
+function Sell.FarmCompareText(c)
+  c = c or Sell.FarmCompare()
+  local m = function(v) return plain(ns.money(math.floor(v + 0.5))) end
+  local short = ("ventes de la session : net %s (%s/h)"):format(m(c.game.net), m(math.max(c.game.perHour, 0)))
+  local long = {
+    ("Session de jeu (depuis %s) : %s."):format(date("%H:%M", c.game.since), salesLine(c.game)),
+  }
+  if c.farm then
+    short = short .. (" · farm en cours %s/h, encaissé %s/h"):format(m(c.farm.total), m(math.max(c.farmSales.perHour, 0)))
+    long[#long + 1] = ("Farm en cours (%s, %d min) : loot ~%s/h + or ramassé %s/h = %s/h ; à l'HV pendant ce temps : %s."):format(
+      c.farm.zone or "?", math.floor(c.farm.hours * 60 + 0.5), m(c.farm.lootPerHour), m(c.farm.moneyPerHour),
+      m(c.farm.total), salesLine(c.farmSales))
+  end
+  if c.ref then
+    short = short .. (" · farm habituel %s/h"):format(m(c.ref))
+    long[#long + 1] = ("Ton farm habituel : %s/h (médiane de tes zones) ; c'est aussi ce que vaut le temps passé à looter un objet dans le plancher de vente (règle « farm »)."):format(m(c.ref))
+  end
+  long[#long + 1] = "Ventes et expirations comptent à la lecture des courriers : passe à la boîte aux lettres."
+  return short, table.concat(long, " ")
 end
 
 -- Garde-fous : on ne poste jamais sous le plancher ni sous le rachat PNJ (net de commission), ni plus
 -- de 3 fois au-dessus du prix réel : une erreur de calcul ne doit pas coûter d'or.
 function Sell.Guard(e)
+  if e.bank then return false, "objet en banque : retire-le d'abord" end
   if not e.price or e.price < 1 then return false, "pas de prix" end
   if e.floor and e.price < e.floor then return false, "sous le plancher" end
   local meta = AHLedgerDB.items and AHLedgerDB.items[e.id]
@@ -636,6 +744,8 @@ function Sell.CancelNext()
           a.cancelling = true
           A.CancelAuction(a.aid)
           Sell.session.cancelled = Sell.session.cancelled + 1
+          local cs = Sell.session.cancels
+          cs[#cs + 1] = { t = time(), id = g.id, qty = a.qty, dep = (a.qty or 1) * Sell.DepositPerUnit(g.id) }
           local name = (AHLedgerDB.items[g.id] and AHLedgerDB.items[g.id].n) or ("#" .. g.id)
           ns.print(("Annulation : %s ×%d à %s/u. Nouveau prix conseillé %s/u : reposte-le depuis la file de vente une fois l'objet récupéré."):format(
             name, a.qty, ns.money(g.unit), ns.money(g.newPrice)))
@@ -661,9 +771,10 @@ function Sell.SessionText()
   local text = ("session : %d posée%s (~%s net), %d annulée%s"):format(
     s.posted, s.posted > 1 and "s" or "", plain(ns.money(s.net)), s.cancelled, s.cancelled > 1 and "s" or "")
   local sold = Sell.SessionSold()
-  if sold.units > 0 then
-    text = text .. (" · encaissé %d u., commission %s, net %s"):format(
-      sold.units, plain(ns.money(sold.cut)), plain(ns.money(sold.net)))
+  if sold.units > 0 or sold.depLost > 0 then
+    text = text .. (" · encaissé %d u., commission %s"):format(sold.units, plain(ns.money(sold.cut)))
+    if sold.depLost > 0 then text = text .. ", dépôts perdus " .. plain(ns.money(math.floor(sold.depLost + 0.5))) end
+    text = text .. ", net " .. plain(ns.money(math.floor(sold.net + 0.5)))
   end
   return text
 end
@@ -675,7 +786,7 @@ end
 local KEY_ALIAS = {
   undercut = "undercut", plancher = "floorPct", plafond = "ceilMult", marge = "vendorMargin", profit = "minProfit",
   pile = "stackSize", piles = "stacks", duree = "duration", ["durée"] = "duration", sous = "belowFloor",
-  fixe = "floorFixed", prix = "fixedPrice",
+  fixe = "floorFixed", prix = "fixedPrice", farm = "farmCost",
 }
 local BELOW_ALIAS = { garder = "keep", keep = "keep", pnj = "vendor", vendor = "vendor", attendre = "wait", wait = "wait" }
 
@@ -700,14 +811,19 @@ local function parseValue(key, text)
     return BELOW_ALIAS[low]
   elseif key == "floorFixed" or key == "fixedPrice" then
     return Sell.ParseMoney(low)
+  elseif key == "farmCost" then
+    -- coefficient (1 = l'or/h de farm habituel) ; 0 désactive (false : bloque aussi le niveau hérité)
+    local n = tonumber(low)
+    if n == 0 then return false end
+    return n and n > 0 and n or nil
   end
 end
 
 local function describe(r)
   local u = r.undercutPct and ("%.1f %%"):format(r.undercutPct * 100) or plain(ns.money(r.undercutCopper or 1))
-  return ("undercut %s · plancher %.0f %% du prix réel, PNJ +%.0f %%, achat +%.0f %%%s · plafond ×%.2f · pile %s × %s · durée %s · sous le plancher : %s"):format(
+  return ("undercut %s · plancher %.0f %% du prix réel, PNJ +%.0f %%, achat +%.0f %%, farm %s%s · plafond ×%.2f · pile %s × %s · durée %s · sous le plancher : %s"):format(
     u, (r.floorPct or 0) * 100, (r.vendorMargin or 0) * 100, (r.minProfit or 0) * 100,
-    r.floorFixed and (" , fixe " .. plain(ns.money(r.floorFixed))) or "", r.ceilMult or 0,
+    r.farmCost and ("×%.2g"):format(r.farmCost) or "non", r.floorFixed and (" , fixe " .. plain(ns.money(r.floorFixed))) or "", r.ceilMult or 0,
     tostring(r.stackSize or "tout"), tostring(r.stacks or "auto"), r.duration and (r.duration .. " h") or "auto",
     ACTION_LABEL[r.belowFloor or "keep"] or "?")
 end
@@ -747,7 +863,7 @@ function Sell.Command(rest)
     local key, val = args:match("^(%S+)%s+(.+)$")
     local k = key and KEY_ALIAS[key:lower()]
     if not k then
-      ns.print("Clés : undercut (1c ou 2%), plancher (70%), marge, profit, plafond (1.2), pile, piles, duree (12/24/48), sous (garder/pnj/attendre), fixe (plancher fixé), prix (prix fixé). « off » retire la règle.")
+      ns.print("Clés : undercut (1c ou 2%), plancher (70%), marge, profit, plafond (1.2), pile, piles, duree (12/24/48), sous (garder/pnj/attendre), fixe (plancher fixé), prix (prix fixé), farm (coût de farm : 1, 0.5, 0 = ignoré). « off » retire la règle.")
       return
     end
     local value, clear = parseValue(k, val)
