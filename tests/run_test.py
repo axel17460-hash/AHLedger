@@ -1446,6 +1446,7 @@ print("OK : infobulle sans doublons (PNJ, stock, prix Auctionator)")
 # --- Meilleur jour et meilleure heure pour vendre (Timing.lua) ---
 tm = lua.eval("""function(ns)
   local T = ns.Timing
+  local WEEK = T.WEEK
   -- dimanche 00:00 en heure locale (celle de date(), comme en jeu)
   local t0 = 19700 * 86400
   while true do
@@ -1454,7 +1455,7 @@ tm = lua.eval("""function(ns)
     t0 = t0 + 3600 - (d.min * 60 + d.sec)
   end
   local function hourOf(t) local d = date("*t", t); return d.wday - 1, d.hour end
-  -- Scanne aux instants donnés ; rate(wd, h) = enchères vendues par heure (par objet)
+  -- Scanne aux instants donnés ; rate(wd, h) = enchères vendues par heure (par objet), sans hasard
   local function simulate(times, rates)
     local db = { scans = {} }
     local last
@@ -1474,20 +1475,22 @@ tm = lua.eval("""function(ns)
     return db
   end
   local r = {}
-  -- 1) Pic connu : scans toutes les heures pendant 3 semaines ; l'objet 1 se vend 2 fois plus le dimanche soir
+  -- 1) Pic connu : scans toutes les heures pendant 8 semaines (il faut 4 dates par jour, et le test
+  --    d'homogénéité sur 28 cases demande du volume) ; l'objet 1 se vend 2 fois plus le dimanche soir
   local hourly = {}
-  for h = 0, 21 * 24 do hourly[#hourly + 1] = t0 + h * 3600 end
+  for h = 0, 8 * 7 * 24 do hourly[#hourly + 1] = t0 + h * 3600 end
   local db1 = simulate(hourly, {
     [1] = function(wd, h) return (wd == 0 and h >= 18) and 4 or 2 end,
     [2] = function() return 2 end })
   local p1, p2 = T.Profile(db1, 1), T.Profile(db1, 2)
   r.peakStatus, r.peakCell, r.peakText, r.peakGain = p1.status, p1.bestCell and p1.bestCell.cell, p1.text, p1.gain
-  r.flatStatus, r.flatText = p2.status, p2.text
+  r.peakCellGain, r.peakMarked = p1.cells[3].gain, p1.marked
+  r.flatStatus, r.flatText, r.flatMarked = p2.status, p2.text, p2.marked
   r.describe = T.Describe(p1)
   -- 2) Biais de scan : le joueur scanne toutes les heures le dimanche soir, une seule heure (20-21 h) les
   --    autres soirs. Ventes en réalité régulières : les comptes bruts désignent le dimanche, pas le profil.
   local biased = {}
-  for w = 0, 2 do
+  for w = 0, 7 do
     for wd = 0, 6 do
       local base = t0 + (w * 7 + wd) * 86400
       if wd == 0 then for h = 18, 24 do biased[#biased + 1] = base + h * 3600 end
@@ -1512,18 +1515,124 @@ tm = lua.eval("""function(ns)
   local cuts = {}
   T.Split(t0 + 6 * 86400 + 22 * 3600, t0 + 7 * 86400 + 2 * 3600, function(c, s) cuts[#cuts + 1] = c .. "=" .. s end)
   r.cuts = table.concat(cuts, ",")
-  -- 5) Reprise des snapshots bruts déjà stockés, sans double compte
+  -- 5) Snapshots bruts déjà stockés : ignorés (unités, pas enchères) ; pas de double compte d'un scan
   local db5 = { scans = {
     { v = 2, t = t0 + 3600, gap = 3600, items = "7=1,20,5,5,5,0,0,0,0,0,5,0,0" },
-    { v = 2, t = t0 + 7200, gap = 3600, items = "7=1,20,5,5,5,40,0,0,0,200,5,0,0;8=1,1,5,5,5,0,0,0,0,0,5,0,0" },
-    { v = 2, t = t0 + 90000, gap = 80000, items = "7=1,20,5,5,5,3,0,0,0,15,5,0,0" } } }  -- trop long : ignoré
-  T.Record(db5, t0 + 7200, { [7] = { sold = 40, ns = 2 } }, 3600)  -- même scan que le snapshot : ignoré
+    { v = 2, t = t0 + 7200, gap = 3600, items = "7=1,20,5,5,5,40,0,0,0,200,5,0,0;8=1,1,5,5,5,0,0,0,0,0,5,0,0" } } }
+  T.Record(db5, t0 + 7200, { [7] = { sold = 40, ns = 2 } }, 3600)
+  T.Record(db5, t0 + 7200, { [7] = { sold = 40, ns = 2 } }, 3600)  -- même scan : ignoré
   local tm5 = db5.timing
   local obs5 = 0
   for _, s in pairs(T.parseDense(tm5.obs)) do obs5 = obs5 + s end
   r.bfObs, r.bfItem, r.bfN, r.bf8 = obs5, tm5.it[7], tm5.backfilled, tm5.it[8]
   T.Record(db5, t0 + 10800, { [7] = { sold = 40, ns = 2 } }, 3600)
   r.bfAfter = tm5.it[7]
+  -- 6) Dates comptées : un jour n'est vu à une date que s'il y a été observé 1 h
+  local db6, ev6 = {}, {}
+  for w = 0, 9 do
+    local base = t0 + w * WEEK
+    ev6[#ev6 + 1] = { base + 1, 3601 }                              -- sam. 23 h → dim. 0 h 00 min 01 s
+    if w < 4 then                                                     -- lundi : 2 × 30 min la même date
+      ev6[#ev6 + 1] = { base + 86400 + 10 * 3600 + 1800, 1800 }
+      ev6[#ev6 + 1] = { base + 86400 + 11 * 3600, 1800 }
+    end
+    if w < 6 then ev6[#ev6 + 1] = { base + 2 * 86400 + 10 * 3600 + 1800, 1800 } end  -- mardi : 30 min
+  end
+  for _, e in ipairs(ev6) do T.Record(db6, e[1], { [1] = { ns = 1 } }, e[2]) end
+  r.dn = {}
+  for wd = 0, 6 do r.dn[wd] = db6.timing.dn[wd] or 0 end
+  -- 7) Décroissance : demi-vie de 5 semaines, appliquée au changement de semaine, purge des zéros
+  local db7 = {}
+  T.Record(db7, t0 + 3600, { [5] = { ns = 10 } }, 3600)
+  r.dec0 = db7.timing.it[5]
+  db7.timing.it[9] = "0:1"
+  T.Record(db7, t0 + 5 * WEEK + 7200, { [6] = { ns = 1 } }, 3600)
+  local o7 = T.parseDense(db7.timing.obs)
+  r.dec5, r.decObs, r.dec9, r.decAll = db7.timing.it[5], o7[0], db7.timing.it[9], db7.timing.all
+  T.Record(db7, t0 + 70 * WEEK + 3600, { [6] = { ns = 1 } }, 3600)
+  r.decLate5, r.decLate6 = db7.timing.it[5], db7.timing.it[6]
+  -- 8) Migration v1 → v2 (dixièmes → centièmes, dates vues plafonnées par les heures observées)
+  local o8 = {}
+  for c = 0, 27 do o8[c + 1] = 0 end
+  o8[1], o8[5] = 7200, 1800
+  local db8 = { timing = { v = 1, upto = t0, obs = table.concat(o8, ","), all = "0:20;4:5", it = { [3] = "0:20;4:5" },
+                           dn = { [0] = 5, 3 }, dl = { [0] = 123, 456 }, backfilled = 2 } }
+  local tm8 = T.Store(db8)
+  r.migV, r.migIt, r.migAll, r.migDn0, r.migDn1, r.migDh0 = tm8.v, tm8.it[3], tm8.all, tm8.dn[0], tm8.dn[1], tm8.dh[0]
+  -- 9) Hasard : 200 objets sans aucun pic (moitié Poisson pur, moitié ventes en grappes de 1 à 3
+  --    enchères), 12 semaines, scans le soir en semaine et toute la journée le week-end ; 20 objets avec
+  --    un vrai pic (×2 le dimanche soir). 12 semaines : avec la décroissance, ~6,4 semaines « pleines »
+  -- générateur local (Park-Miller, comme le harnais) : ne décale pas le hasard des tests suivants
+  local seed = TIMING_SEED or 20261127
+  local function rnd(a, b)
+    seed = (seed * 16807) % 2147483647
+    local x = (seed - 1) / 2147483646
+    if not a then return x end
+    return a + math.floor(x * (b - a + 1))
+  end
+  local function poisson(m)
+    local L, k, p = math.exp(-m), 0, 1
+    repeat k = k + 1; p = p * rnd() until p <= L
+    return k - 1
+  end
+  local times = {}
+  for w = 0, 11 do
+    for wd = 0, 6 do
+      local h0 = (wd == 0 or wd == 6) and 10 or 18
+      for h = h0, 24 do times[#times + 1] = t0 + (w * 7 + wd) * 86400 + h * 3600 end
+    end
+  end
+  local rates, peak = {}, {}
+  for id = 1, 200 do rates[id] = 0.1 + 2.9 * rnd() end
+  for id = 301, 320 do peak[id] = 1.5 end
+  local db9, last, total = {}, nil, 0
+  for _, t in ipairs(times) do
+    local gap = last and t - last
+    local diff = {}
+    if gap and gap <= T.MAX_GAP then
+      for id, rt in pairs(rates) do
+        local n = 0
+        if id % 2 == 0 then
+          for _ = 1, poisson(rt / 2 * gap / 3600) do n = n + rnd(1, 3) end
+        else n = poisson(rt * gap / 3600) end
+        if n > 0 then diff[id] = { ns = n, sold = n }; total = total + n end
+      end
+      for id, rt in pairs(peak) do           -- vrai pic : 2 fois plus le dimanche soir
+        local wd, h = hourOf(t - 1)
+        local n = poisson(rt * ((wd == 0 and h >= 18) and 2 or 1) * gap / 3600)
+        if n > 0 then diff[id] = { ns = n, sold = n }; total = total + n end
+      end
+    end
+    T.Record(db9, t, gap and diff, gap)
+    last = t
+  end
+  r.rndSure, r.rndHint, r.rndFlat, r.rndLow = 0, 0, 0, 0
+  local maxPhi = 0
+  for id = 1, 200 do
+    local p = T.Profile(db9, id)
+    if p.status == "sure" then r.rndSure = r.rndSure + 1
+    elseif p.status == "hint" then r.rndHint = r.rndHint + 1
+    elseif p.status == "flat" then r.rndFlat = r.rndFlat + 1
+    else r.rndLow = r.rndLow + 1 end
+    if id % 2 == 0 and p.phi then maxPhi = math.max(maxPhi, p.phi) end
+  end
+  r.rndPhi = maxPhi
+  r.peakFound = 0
+  for id = 301, 320 do
+    local p = T.Profile(db9, id)
+    if p.status == "sure" and p.text and p.text:find("dimanche soir", 1, true) then r.peakFound = r.peakFound + 1 end
+  end
+  -- arrondi : la masse est conservée (décroissance mise à part, d'où un contrôle sans elle)
+  local db10, tot10 = {}, 0
+  for i = 1, 50 do
+    local n = (i % 7) + 1
+    tot10 = tot10 + n
+    T.Record(db10, t0 + i * 5000, { [1] = { ns = n }, [2] = { ns = 1 } }, 5000)
+  end
+  local s10, s10b = 0, 0
+  for _, n in pairs(T.parseSparse(db10.timing.it[1])) do s10 = s10 + n end
+  for _, n in pairs(T.parseSparse(db10.timing.all)) do s10b = s10b + n end
+  r.mass, r.massWant, r.massAll = s10, tot10 * 100, s10b
   -- Diff : nombre d'enchères vendues à côté des unités
   local prev = { ["9:20:200:?"] = { c = 3, tl = 4 } }
   local cur = { ["9:20:200:?"] = { c = 1, tl = 4 } }
@@ -1532,18 +1641,33 @@ tm = lua.eval("""function(ns)
   return r
 end""")(ns)
 tmr = {k: tm[k] for k in tm.keys()}
+for k in ("dn",):
+    tmr[k] = dict(tm[k])
 print("Moment de vente :", tmr)
-assert tmr["peakStatus"] == "sure" and tmr["peakCell"] == 3, tmr                     # dimanche (0) × soir (3)
-assert tmr["peakText"].startswith("+") and "dimanche soir" in tmr["peakText"] and tmr["peakGain"] > 0.5, tmr
+assert tmr["peakStatus"] == "sure" and tmr["peakCell"] == 3 and tmr["peakMarked"], tmr   # dimanche (0) × soir (3)
+assert tmr["peakText"].startswith("+") and "dimanche soir" in tmr["peakText"], tmr
+assert tmr["peakGain"] >= 0.15 and tmr["peakCellGain"] > 0.5, tmr
 assert "fiable" in tmr["describe"], tmr
-assert tmr["flatStatus"] == "flat" and tmr.get("flatText") is None, tmr                 # ventes régulières : rien
+assert tmr["flatStatus"] == "flat" and tmr.get("flatText") is None and not tmr["flatMarked"], tmr  # régulier : rien
 assert tmr["rawBest"] == 0 and tmr["rawRatio"] > 4, tmr                              # le biais existe en brut…
 assert tmr["biasStatus"] == "flat" and abs(tmr["biasDayGain"]) < 0.05, tmr           # … et il est corrigé
 assert tmr["wedStatus"] == "sure" and tmr["wedCell"] == 3 * 4 + 3 and "mercredi soir" in tmr["wedText"], tmr
 assert tmr["lowStatus"] == "low" and tmr["lowText"].startswith("pas assez de données"), tmr
 assert tmr["cuts"] == "27=7200,0=7200", tmr
-assert tmr["bfN"] == 2 and tmr["bfObs"] == 7200 and tmr["bfItem"] == "0:10" and tmr.get("bf8") is None, tmr
-assert tmr["bfAfter"] == "0:30", tmr                                                 # scan suivant : +2 enchères
+assert tmr.get("bfN") is None and tmr["bfObs"] == 3600 and tmr["bfItem"] == "0:200" and tmr.get("bf8") is None, tmr
+assert tmr["bfAfter"] == "0:400", tmr                                                # scan suivant : +2 enchères
+# dates : 1 s du dimanche ×10 → 0 date ; lundi 2 × 30 min ×4 → 4 ; mardi 30 min ×6 → 0 ; samedi 1 h ×10 → 10
+assert tmr["dn"] == {0: 0, 1: 4, 2: 0, 3: 0, 4: 0, 5: 0, 6: 10}, tmr["dn"]
+assert tmr["dec0"] == "0:1000" and tmr["dec5"] == "0:500" and tmr["decObs"] == 1800 + 3600, tmr  # demi-vie 5 sem.
+assert tmr.get("dec9") is None and tmr["decAll"] == "0:600", tmr                     # 1 centième : purgé
+assert tmr.get("decLate5") is None and tmr["decLate6"] == "0:100", tmr               # 65 semaines plus tard
+assert tmr["migV"] == 2 and tmr["migIt"] == "0:200;4:50" and tmr["migAll"] == "0:200;4:50", tmr
+assert tmr["migDn0"] == 2 and tmr["migDn1"] == 0 and tmr["migDh0"] == 3600, tmr
+print(f"Marché sans pic, 200 objets : {tmr['rndSure']} fiables, {tmr['rndHint']} indicatifs, {tmr['rndFlat']} plats, "
+      f"{tmr['rndLow']} sans données ; φ max (grappes) {tmr['rndPhi']:.2f} ; vrai pic retrouvé {tmr['peakFound']}/20")
+assert tmr["rndSure"] <= 10, tmr                                                     # ≤ 5 % de fausses alertes
+assert tmr["peakFound"] == 20, tmr
+assert tmr["mass"] == tmr["massWant"] and tmr["massAll"] == tmr["massWant"] + 5000, tmr  # arrondi sans perte
 assert tmr["diffNs"] == 2 and tmr["diffSold"] == 40, tmr
 
 # Branchements : infobulle (seulement si fiable), rapport, /ahl moment
@@ -1559,12 +1683,12 @@ br = lua.eval("""function(ns)
     IsShiftKeyDown = nil
     return table.concat(TT, "\\n")
   end
-  -- profil synthétique : 3 semaines observées en entier, le tisse-mage part 2× plus le dimanche soir
+  -- profil synthétique (v2, centièmes) : 6 semaines observées en entier, le tisse-mage part 2× plus le dimanche soir
   local obs, it, all = {}, {}, {}
-  for c = 0, 27 do obs[c] = 3 * 6 * 3600; it[c] = 3 * 6 * 2 * 10; all[c] = it[c] * 5 end
+  for c = 0, 27 do obs[c] = 6 * 6 * 3600; it[c] = 6 * 6 * 2 * 100; all[c] = it[c] * 5 end
   it[3] = it[3] * 2
-  db.timing = { v = 1, upto = time(), obs = "", all = T.packSparse(all), it = { [4338] = T.packSparse(it) },
-                dn = { [0] = 3, 3, 3, 3, 3, 3, 3 }, dl = {} }
+  db.timing = { v = 2, upto = time(), obs = "", all = T.packSparse(all), it = { [4338] = T.packSparse(it) },
+                dn = { [0] = 6, 6, 6, 6, 6, 6, 6 }, dl = {}, dh = {} }
   local parts = {}
   for c = 0, 27 do parts[c + 1] = obs[c] end
   db.timing.obs = table.concat(parts, ",")

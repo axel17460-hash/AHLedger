@@ -15,16 +15,39 @@
 -- On compte des ENCHÈRES vendues (événements), pas des unités : une pile de 20 achetée d'un coup
 -- ferait un faux pic. Les intervalles de plus de MAX_GAP sont ignorés (trop flous pour situer l'heure).
 --
--- Stockage compact (db.timing, jamais purgé, comme db.rebound : la connaissance s'accumule) :
---   v     = 1 (format)
+-- STATISTIQUE (v2, relecture de novembre 2026) :
+--   1. Test d'homogénéité du χ² (Pearson) sur les cases observées au moins MIN_BUCKET_HOURS : s'il ne
+--      rejette pas « même taux partout » au seuil de 5 %, on n'annonce rien (« pas de moment marqué »).
+--   2. Surdispersion : les ventes arrivent en grappes (un acheteur prend plusieurs enchères), la loi de
+--      Poisson sous-estime alors le hasard. φ = χ² / ddl, plancher 1, et chaque z est divisé par √φ.
+--      φ est estimé SANS les cases du groupe testé (sinon un vrai pic gonfle φ et s'étouffe lui-même :
+--      z serait plafonné à √ddl, soit 2,4 si le joueur ne scanne que 7 cases), et jamais sous la
+--      surdispersion de tout le marché (Σ χ² / Σ ddl de tous les objets, voir Dispersion).
+--   3. Comparaisons multiples : 7 jours + 4 tranches + 28 cases = 39 tests. « fiable » exige z ≥ 3
+--      (Bonferroni : 39 × 0,13 % ≈ 5 % de fausse alerte au plus par objet), « indicatif » z ≥ 2.
+--   4. Lissage : chaque objet est tiré vers le profil global de l'HV (forme jour × tranche de tous les
+--      objets), avec un a priori de PRIOR_EVENTS ventes fictives par groupe ; l'HV est tiré vers le plat.
+--   5. Un jour ne compte comme vu que s'il l'a été à MIN_DAY_DATES dates, chacune avec MIN_DATE_HOURS.
+--   6. Décroissance : demi-vie HALF_LIFE_WEEKS semaines. Au changement de semaine (semaine = numéro
+--      de semaine depuis l'époque Unix, du jeudi au jeudi en UTC), obs, all et it sont multipliés par
+--      le facteur hebdomadaire ; ce qui arrondit à 0 disparaît (purge naturelle). Les comptes pondérés
+--      sont ensuite traités comme des comptes de Poisson : leur vraie variance (Σ w² λ) est plus
+--      petite, le test est donc prudent. dn (dates vues) ne décroît pas : c'est une simple condition.
+--   7. Conseil : le jour d'abord ; la case (jour × tranche) n'est ajoutée que si elle passe elle-même
+--      le seuil. Une case ou une tranche seule n'est annoncée que si aucun jour ne passe.
+--
+-- Stockage compact (db.timing, sans autre purge que la décroissance) :
+--   v     = 2 (format ; v1 est migré : comptes ×10, dates vues plafonnées, voir Migrate)
 --   upto  = heure du dernier scan intégré (évite de compter deux fois un scan)
---   first = début du premier intervalle observé
+--   first = début du premier intervalle observé ; wk = semaine de la dernière décroissance
 --   obs   = "s0,s1,…,s27"  secondes observées par case (case = jour * 4 + tranche, jour 0 = dimanche)
---   all   = "case:n;case:n" enchères vendues tous objets confondus, en dixièmes (répartition au prorata)
---   it[id]= "case:n;case:n" enchères vendues de l'objet, en dixièmes ; seules les cases non nulles
---   dn    = { [jour] = nombre de dates distinctes observées }, dl = { [jour] = dernière date vue }
--- Première utilisation : reprise des snapshots bruts déjà stockés (db.scans), où l'on ne connaît que
--- les unités vendues par scan : chaque objet vendu dans un intervalle y compte pour UNE enchère.
+--   all   = "case:n;case:n" enchères vendues tous objets confondus, en centièmes (répartition au prorata)
+--   it[id]= "case:n;case:n" enchères vendues de l'objet, en centièmes ; seules les cases non nulles
+--   dn    = { [jour] = dates distinctes observées au moins MIN_DATE_HOURS },
+--   dl    = { [jour] = dernière date vue }, dh = { [jour] = secondes observées à cette date }
+-- Les anciens snapshots bruts (db.scans) ne sont PAS repris : ils ne donnent que les unités vendues
+-- par objet, pas le nombre d'enchères, et le ratio enchères / unité n'est pas connu à la première
+-- utilisation. Compter « une enchère par objet vendu » (v1) écrasait les heures chargées : exclus.
 local _, ns = ...
 
 local Timing = {}
@@ -34,17 +57,23 @@ Timing.SLOTS = 4                -- tranches de 6 h
 Timing.SLOT_HOURS = 6
 Timing.CELLS = 7 * Timing.SLOTS
 Timing.MAX_GAP = 6 * 3600       -- intervalle entre scans au-delà duquel l'heure des ventes est trop floue
-Timing.PRIOR_HOURS = 2          -- lissage : chaque case reçoit 2 h fictives au taux moyen
+Timing.SCALE = 100              -- comptes stockés en centièmes d'enchère
+Timing.WEEK = 7 * 86400
+Timing.HALF_LIFE_WEEKS = 5      -- décroissance : une vente d'il y a 5 semaines pèse moitié moins
+Timing.DECAY = 0.5 ^ (1 / Timing.HALF_LIFE_WEEKS) -- facteur hebdomadaire (≈ 0,87)
+Timing.PRIOR_EVENTS = 5         -- lissage : 5 ventes fictives par groupe, au taux du profil de l'HV
 Timing.MIN_EVENTS = 15          -- enchères vendues avant de parler du moment (objet)
 Timing.MIN_EVENTS_ALL = 60      -- idem, tous objets confondus
 Timing.MIN_HOURS = 12           -- heures de marché observées au total
 Timing.MIN_BUCKET_HOURS = 2     -- une case (ou un jour, une tranche) doit avoir été observée 2 h
 Timing.MIN_BUCKET_EVENTS = 4    -- ... et compter au moins 4 ventes pour être proposée
-Timing.MIN_DAY_DATES = 2        -- un jour de la semaine doit avoir été vu à 2 dates différentes
+Timing.MIN_DAY_DATES = 4        -- un jour de la semaine doit avoir été vu à 4 dates différentes…
+Timing.MIN_DATE_HOURS = 1       -- … chacune observée au moins 1 h
+Timing.CHI2_Z = 1.645           -- test d'homogénéité au seuil de 5 % (quantile normal, Wilson-Hilferty)
 Timing.GAIN_SURE = 0.15         -- fiable : au moins +15 % de ventes par heure
-Timing.Z_SURE = 2               -- ... et un écart net face au hasard (loi de Poisson, z ≥ 2)
-Timing.GAIN_HINT = 0.10         -- indicatif : +10 %, z ≥ 1
-Timing.Z_HINT = 1
+Timing.Z_SURE = 3               -- ... et z ≥ 3 après surdispersion (Bonferroni sur ~39 tests)
+Timing.GAIN_HINT = 0.10         -- indicatif : +10 %, z ≥ 2
+Timing.Z_HINT = 2
 
 Timing.DAYS = { [0] = "dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi" }
 Timing.SLOT_NAMES = { [0] = "nuit", "matin", "après-midi", "soir" }
@@ -101,7 +130,35 @@ end
 -- Collecte ------------------------------------------------------------------------------------
 
 local function newStore()
-  return { v = 1, obs = packDense({}), all = "", it = {}, dn = {}, dl = {} }
+  return { v = 2, obs = packDense({}), all = "", it = {}, dn = {}, dl = {}, dh = {} }
+end
+
+-- Multiplie des comptes entiers par f ; un compte qui ne baisse pas à l'arrondi perd 1 (sinon les
+-- petites valeurs, 1 à 3, resteraient figées) : tout finit par atteindre 0 et disparaît.
+local function decayCounts(t, f)
+  for c, n in pairs(t) do
+    local m = math.floor(n * f + 0.5)
+    if m >= n then m = n - 1 end
+    t[c] = m > 0 and m or nil
+  end
+end
+
+-- Décroissance au changement de semaine (obs, all et tous les objets) ; les objets vides sont retirés
+local function decayTo(tm, obs, all, cache, wk)
+  if tm.wk and wk > tm.wk then
+    local f = Timing.DECAY ^ (wk - tm.wk)
+    local o = {}
+    for c = 0, Timing.CELLS - 1 do if obs[c] > 0 then o[c] = obs[c] end end
+    decayCounts(o, f)
+    for c = 0, Timing.CELLS - 1 do obs[c] = o[c] or 0 end
+    decayCounts(all, f)
+    for id, str in pairs(tm.it) do
+      local t = cache[id] or parseSparse(str)
+      decayCounts(t, f)
+      cache[id] = t
+    end
+  end
+  if not tm.wk or wk > tm.wk then tm.wk = wk end
 end
 
 -- Ajoute un intervalle observé [t - gap, t] et ses ventes : events[id] = enchères vendues
@@ -109,20 +166,26 @@ local function addInterval(tm, obs, all, cache, t, gap, events)
   local t0 = t - gap
   if not tm.first or t0 < tm.first then tm.first = t0 end
   local pieces = {}
+  local need = Timing.MIN_DATE_HOURS * 3600
   Timing.Split(t0, t, function(cell, secs, dateKey, wd)
     pieces[#pieces + 1] = { cell, secs }
     obs[cell] = obs[cell] + secs
-    if tm.dl[wd] ~= dateKey then
-      tm.dl[wd] = dateKey
-      tm.dn[wd] = (tm.dn[wd] or 0) + 1
-    end
+    -- un jour n'est « vu » à une date que s'il y a été observé au moins MIN_DATE_HOURS
+    if tm.dl[wd] ~= dateKey then tm.dl[wd], tm.dh[wd] = dateKey, 0 end
+    local before = tm.dh[wd] or 0
+    tm.dh[wd] = before + secs
+    if before < need and tm.dh[wd] >= need then tm.dn[wd] = (tm.dn[wd] or 0) + 1 end
   end)
   for id, n in pairs(events) do
     if n > 0 then
       local t2 = cache[id]
       if not t2 then t2 = parseSparse(tm.it[id]); cache[id] = t2 end
+      -- arrondi du cumul (et non de chaque morceau) : la somme des morceaux = n exactement
+      local cum, done = 0, 0
       for _, p in ipairs(pieces) do
-        local add = math.floor(n * 10 * p[2] / gap + 0.5)
+        cum = cum + n * Timing.SCALE * p[2] / gap
+        local add = math.floor(cum + 0.5) - done
+        done = done + add
         if add > 0 then
           t2[p[1]] = (t2[p[1]] or 0) + add
           all[p[1]] = (all[p[1]] or 0) + add
@@ -135,37 +198,48 @@ end
 local function flush(tm, obs, all, cache)
   tm.obs = packDense(obs)
   tm.all = packSparse(all)
-  for id, t in pairs(cache) do tm.it[id] = packSparse(t) end
+  for id, t in pairs(cache) do
+    local s = packSparse(t)
+    tm.it[id] = s ~= "" and s or nil
+  end
 end
 
--- Reprise des snapshots bruts déjà stockés (format v = 2) : une seule fois
-function Timing.Backfill(db, tm)
-  local obs, all, cache = parseDense(tm.obs), parseSparse(tm.all), {}
-  local n = 0
-  for _, sc in ipairs(db.scans or {}) do
-    if sc.v == 2 and sc.gap and sc.gap > 0 and sc.gap <= Timing.MAX_GAP and sc.t and sc.t > (tm.upto or 0) and sc.items then
-      local events = {}
-      for id, sold in sc.items:gmatch("(%d+)=%d+,%d+,%d+,%d+,%d+,(%d+)") do
-        if tonumber(sold) > 0 then events[tonumber(id)] = 1 end
-      end
-      addInterval(tm, obs, all, cache, sc.t, sc.gap, events)
-      tm.upto = sc.t
-      n = n + 1
-    end
+-- v1 → v2 : comptes en dixièmes → centièmes. v1 comptait une date dès la 1re seconde observée : on
+-- plafonne dn par le nombre d'heures observées ce jour-là (une date valable = au moins 1 h), et la
+-- dernière date est réputée déjà comptée. La part reprise des snapshots en v1 est gardée : elle
+-- s'efface avec la décroissance.
+function Timing.Migrate(tm)
+  if tm.v ~= 1 then return tm end
+  local function x10(str)
+    local t = parseSparse(str)
+    for c, n in pairs(t) do t[c] = n * 10 end
+    return packSparse(t)
   end
-  flush(tm, obs, all, cache)
-  tm.backfilled = n
-  return n
+  tm.all = x10(tm.all)
+  for id, s in pairs(tm.it or {}) do tm.it[id] = x10(s) end
+  local obs = parseDense(tm.obs)
+  tm.dn, tm.dl, tm.dh = tm.dn or {}, tm.dl or {}, {}
+  for wd = 0, 6 do
+    local secs = 0
+    for s = 0, Timing.SLOTS - 1 do secs = secs + obs[wd * Timing.SLOTS + s] end
+    local cap = math.floor(secs / (Timing.MIN_DATE_HOURS * 3600))
+    if tm.dn[wd] then tm.dn[wd] = math.min(tm.dn[wd], cap) end
+    if tm.dl[wd] then tm.dh[wd] = Timing.MIN_DATE_HOURS * 3600 end
+  end
+  if tm.upto then tm.wk = math.floor(tm.upto / Timing.WEEK) end
+  tm.backfilled = nil
+  tm.v = 2
+  return tm
 end
 
 function Timing.Store(db)
   local tm = db.timing
-  if not tm or tm.v ~= 1 then
+  if tm and tm.v == 1 then Timing.Migrate(tm) end
+  if not tm or tm.v ~= 2 then
     tm = newStore()
     db.timing = tm
-    Timing.Backfill(db, tm)
   end
-  tm.it, tm.dn, tm.dl = tm.it or {}, tm.dn or {}, tm.dl or {}
+  tm.it, tm.dn, tm.dl, tm.dh = tm.it or {}, tm.dn or {}, tm.dl or {}, tm.dh or {}
   return tm
 end
 
@@ -173,13 +247,14 @@ end
 function Timing.Record(db, now, diff, gap)
   local tm = Timing.Store(db)
   if not (diff and gap and gap > 0 and gap <= Timing.MAX_GAP) then return end
-  if tm.upto and now <= tm.upto then return end -- déjà compté (reprise des snapshots)
+  if tm.upto and now <= tm.upto then return end -- déjà compté
   local events = {}
   for id, d in pairs(diff) do
     local n = d.ns or ((d.sold or 0) > 0 and 1 or 0) -- ns : enchères vendues (Scan.Diff)
     if n > 0 then events[id] = n end
   end
   local obs, all, cache = parseDense(tm.obs), parseSparse(tm.all), {}
+  decayTo(tm, obs, all, cache, math.floor(now / Timing.WEEK))
   addInterval(tm, obs, all, cache, now, gap, events)
   flush(tm, obs, all, cache)
   tm.upto = now
@@ -187,23 +262,105 @@ end
 
 -- Analyse -------------------------------------------------------------------------------------
 
+local function toEvents(t)
+  for c, n in pairs(t) do t[c] = n / Timing.SCALE end
+  return t
+end
+
+-- Quantile du χ² à ddl degrés de liberté (approximation de Wilson-Hilferty)
+function Timing.Chi2Crit(ddl, z)
+  local a = 2 / (9 * ddl)
+  return ddl * (1 - a + (z or Timing.CHI2_Z) * math.sqrt(a)) ^ 3
+end
+
+-- Forme du profil de l'HV : indice par case (taux lissé / taux moyen), 1 si inconnu
+local function hvShape(tm, obs)
+  local A = toEvents(parseSparse(tm.all))
+  local EA, OA = 0, 0
+  for c = 0, Timing.CELLS - 1 do EA, OA = EA + (A[c] or 0), OA + obs[c] end
+  local g = {}
+  local M = OA > 0 and EA / (OA / 3600) or 0
+  for c = 0, Timing.CELLS - 1 do
+    local h = obs[c] / 3600
+    g[c] = (M > 0 and h > 0) and ((A[c] or 0) + Timing.PRIOR_EVENTS) / (h + Timing.PRIOR_EVENTS / M) / M or 1
+  end
+  return g
+end
+
+-- Résidus de Pearson par case observée au moins MIN_BUCKET_HOURS, χ² et degrés de liberté
+local function homogeneity(ev, obs, mean)
+  local resid, chi2, k = {}, 0, 0
+  for c = 0, Timing.CELLS - 1 do
+    local h = obs[c] / 3600
+    if h >= Timing.MIN_BUCKET_HOURS then
+      local ex = mean * h
+      local r = ((ev[c] or 0) - ex) / math.sqrt(ex)
+      resid[c], chi2, k = r, chi2 + r * r, k + 1
+    end
+  end
+  return resid, chi2, k - 1
+end
+
+-- Surdispersion du marché : Σ χ² / Σ ddl sur tous les objets assez vendus (plancher 1). Plancher
+-- commun de φ : avec peu de cases observées (10 ddl), l'estimation propre à un objet est trop
+-- instable, et un objet vendu en grappes passerait sinon pour « marqué ». Calculé une fois par scan.
+local poolCache = setmetatable({}, { __mode = "k" })
+function Timing.Dispersion(tm, obs)
+  local hit = poolCache[tm]
+  if hit and hit.upto == tm.upto and hit.obs == tm.obs and hit.all == tm.all then return hit.phi end
+  obs = obs or parseDense(tm.obs)
+  local O = 0
+  for c = 0, Timing.CELLS - 1 do O = O + obs[c] end
+  local X, D = 0, 0
+  if O > 0 then
+    for _, str in pairs(tm.it) do
+      local ev = toEvents(parseSparse(str))
+      local E = 0
+      for c = 0, Timing.CELLS - 1 do E = E + (ev[c] or 0) end
+      if E >= Timing.MIN_EVENTS then
+        local _, chi2, ddl = homogeneity(ev, obs, E / (O / 3600))
+        if ddl >= 1 then X, D = X + chi2, D + ddl end
+      end
+    end
+  end
+  local phi = D > 0 and math.max(1, X / D) or 1
+  poolCache[tm] = { upto = tm.upto, obs = tm.obs, all = tm.all, phi = phi }
+  return phi
+end
+
 -- Taux lissé et écart au hasard d'un groupe de cases (un jour, une tranche ou une case seule)
-local function bucket(ev, obs, cells, mean)
-  local e, o = 0, 0
-  for _, c in ipairs(cells) do e, o = e + (ev[c] or 0), o + (obs[c] or 0) end
+-- ctx = { mean, g (forme a priori), resid (résidus de Pearson par case testée), chi2, ddl }
+local function bucket(ev, obs, cells, ctx)
+  local e, o, go = 0, 0, 0
+  for _, c in ipairs(cells) do
+    e, o = e + (ev[c] or 0), o + (obs[c] or 0)
+    go = go + ctx.g[c] * (obs[c] or 0)
+  end
   local hours = o / 3600
   local b = { events = e, hours = hours }
   if hours <= 0 then return b end
-  b.rate = (e + Timing.PRIOR_HOURS * mean) / (hours + Timing.PRIOR_HOURS)
+  local mean = ctx.mean
+  local prior = mean * go / o -- taux attendu si l'objet suivait la forme de l'HV
+  b.rate = (e + Timing.PRIOR_EVENTS) / (hours + Timing.PRIOR_EVENTS / prior)
   b.gain = b.rate / mean - 1
   local expected = mean * hours
-  b.z = expected > 0 and (e - expected) / math.sqrt(expected) or 0
+  local z = expected > 0 and (e - expected) / math.sqrt(expected) or 0
+  -- surdispersion estimée sans les cases du groupe
+  local rb, kb = 0, 0
+  for _, c in ipairs(cells) do
+    if ctx.resid[c] then rb, kb = rb + ctx.resid[c] ^ 2, kb + 1 end
+  end
+  local phi = 1
+  if ctx.ddl - kb >= 1 then phi = (ctx.chi2 - rb) / (ctx.ddl - kb)
+  elseif ctx.ddl >= 1 then phi = ctx.chi2 / ctx.ddl end
+  b.phi = math.max(1, phi, ctx.pool or 1)
+  b.z0, b.z = z, z / math.sqrt(b.phi)
   b.ok = hours >= Timing.MIN_BUCKET_HOURS and e >= Timing.MIN_BUCKET_EVENTS
   return b
 end
 
 local function grade(b)
-  if not (b and b.ok and b.gain) then return nil end
+  if not (b and b.ok and b.gain and b.z) then return nil end
   if b.gain >= Timing.GAIN_SURE and b.z >= Timing.Z_SURE then return "sure" end
   if b.gain >= Timing.GAIN_HINT and b.z >= Timing.Z_HINT then return "hint" end
 end
@@ -236,14 +393,15 @@ end
 
 -- Profil d'un objet (id) ou de tout l'HV (id = nil) :
 -- { status = "sure" | "hint" | "flat" | "low", reliability = texte, why = raison si "low",
---   events, hours, perHour, days[0..6], slots[0..3] (chaque { events, hours, rate, gain, z, ok }),
---   bestDay, bestSlot, bestCell (mêmes champs + day / slot / cell / name / grade),
---   text = « +35 % de ventes le dimanche soir » (moment retenu, nil si rien de marqué) }
+--   events, hours, perHour, chi2, ddl, crit, marked (homogénéité rejetée), phi, pool (φ du marché),
+--   days[0..6], slots[0..3], cells[0..27] (chaque { events, hours, rate, gain, z, phi, ok, grade }),
+--   bestDay, bestSlot, bestCell (mêmes champs + day / slot / cell / name),
+--   text = « +20 % de ventes le dimanche · +90 % de ventes le dimanche soir » (nil si rien de marqué),
+--   chosen = groupes annoncés, gain = gain du premier }
 function Timing.Profile(db, id)
   local tm = Timing.Store(db)
   local obs = parseDense(tm.obs)
-  local ev = parseSparse(id and tm.it[id] or tm.all)
-  for c, n in pairs(ev) do ev[c] = n / 10 end
+  local ev = toEvents(parseSparse(id and tm.it[id] or tm.all))
   local E, O = 0, 0
   for c = 0, Timing.CELLS - 1 do E, O = E + (ev[c] or 0), O + obs[c] end
   local out = { events = E, hours = O / 3600, days = {}, slots = {}, cells = {} }
@@ -258,24 +416,45 @@ function Timing.Profile(db, id)
   local mean = E / (O / 3600)
   out.perHour = mean
 
+  -- Test d'homogénéité : même taux dans toutes les cases assez observées ?
+  local resid, chi2, ddl = homogeneity(ev, obs, mean)
+  out.chi2, out.ddl = chi2, ddl
+  out.crit = ddl >= 1 and Timing.Chi2Crit(ddl) or nil
+  out.marked = out.crit ~= nil and chi2 > out.crit
+  out.phi = ddl >= 1 and math.max(1, chi2 / ddl) or 1
+
+  local g
+  if id then g = hvShape(tm, obs) else
+    g = {}
+    for c = 0, Timing.CELLS - 1 do g[c] = 1 end
+  end
+  out.pool = id and Timing.Dispersion(tm, obs) or 1
+  local ctx = { mean = mean, g = g, resid = resid, chi2 = chi2, ddl = ddl, pool = out.pool }
+
   local dayList, slotList, cellList = {}, {}, {}
   for wd = 0, 6 do
-    local b = bucket(ev, obs, cellsOfDay(wd), mean)
+    local b = bucket(ev, obs, cellsOfDay(wd), ctx)
     b.day, b.name = wd, "le " .. Timing.DAYS[wd]
     b.dates = tm.dn[wd] or 0
     b.ok = b.ok and b.dates >= Timing.MIN_DAY_DATES
     out.days[wd], dayList[#dayList + 1] = b, b
   end
   for s = 0, Timing.SLOTS - 1 do
-    local b = bucket(ev, obs, cellsOfSlot(s), mean)
+    local b = bucket(ev, obs, cellsOfSlot(s), ctx)
     b.slot, b.name = s, Timing.SLOT_SHORT[s]
     out.slots[s], slotList[#slotList + 1] = b, b
   end
   for c = 0, Timing.CELLS - 1 do
-    local b = bucket(ev, obs, { c }, mean)
+    local b = bucket(ev, obs, { c }, ctx)
     b.cell, b.day, b.slot, b.name = c, math.floor(c / Timing.SLOTS), c % Timing.SLOTS, Timing.CellName(c)
     b.ok = b.ok and (tm.dn[b.day] or 0) >= Timing.MIN_DAY_DATES
     out.cells[c], cellList[#cellList + 1] = b, b
+  end
+  -- Rien n'est noté si l'homogénéité n'est pas rejetée
+  if out.marked then
+    for _, list in ipairs({ dayList, slotList, cellList }) do
+      for _, b in ipairs(list) do b.grade = grade(b) end
+    end
   end
 
   -- Comparer des jours n'a de sens que si plusieurs jours ont été observés (idem pour les tranches)
@@ -285,25 +464,24 @@ function Timing.Profile(db, id)
   out.bestDay = nDays >= 3 and bestOf(dayList) or nil
   out.bestSlot = nSlots >= 2 and bestOf(slotList) or nil
   out.bestCell = (nDays >= 3 or nSlots >= 2) and bestOf(cellList) or nil
-  for _, k in ipairs({ "bestDay", "bestSlot", "bestCell" }) do
-    if out[k] then out[k].grade = grade(out[k]) end
-  end
 
-  -- Moment retenu : la case précise si elle tient, sinon le jour et / ou la tranche
+  -- Moment retenu : le jour d'abord, et sa meilleure case seulement si elle passe elle-même le seuil ;
+  -- sinon une case seule, sinon une tranche de la semaine
   local d, s, c = out.bestDay, out.bestSlot, out.bestCell
-  local function pick(level)
-    if c and c.grade == level then return { c } end
-    local t = {}
-    if d and d.grade == level then t[#t + 1] = d end
-    if s and s.grade == level then t[#t + 1] = s end
-    if #t > 0 then return t end
+  local function passes(b, level) return b and b.grade and (b.grade == "sure" or level == "hint") end
+  local chosen
+  for _, level in ipairs({ "sure", "hint" }) do
+    if passes(d, level) then
+      chosen = { d }
+      local inDay = {}
+      for sl = 0, Timing.SLOTS - 1 do inDay[#inDay + 1] = out.cells[d.day * Timing.SLOTS + sl] end
+      local dc = bestOf(inDay)
+      if passes(dc, level) then chosen[2] = dc end
+    elseif passes(c, level) then chosen = { c }
+    elseif passes(s, level) then chosen = { s } end
+    if chosen then out.status = level; break end
   end
-  local chosen = pick("sure")
-  out.status = chosen and "sure" or nil
-  if not chosen then
-    chosen = pick("hint")
-    out.status = chosen and "hint" or "flat"
-  end
+  out.status = out.status or "flat"
   out.reliability = Timing.RELIABILITY[out.status]
   if chosen then
     local parts = {}
