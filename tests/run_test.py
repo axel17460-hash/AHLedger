@@ -1699,7 +1699,7 @@ today2 = lua.eval("""function(ns)
     end
     return ok
   end
-  -- 1. gain d'une vente : p × net − (1 − p) × dépôt − PNJ ; p selon vendus/j et durée, « à tester » : p × 0,5
+  -- 1. gain d'une vente : p × (net − PNJ) − (1 − p) × dépôt ; p selon vendus/j et durée, « à tester » : p × 0,5
   local s1 = { perDay = 10 }
   r.p24, r.p12 = T.SellProb(s1, 10, 24, 0), T.SellProb(s1, 10, 12, 0)
   r.pAhead = T.SellProb(s1, 10, 24, 10)
@@ -1707,7 +1707,7 @@ today2 = lua.eval("""function(ns)
   local g2, p2, dep2 = T.SaleGain(90100, s1, 10, 1000, 12, 0, "test")
   local net = 1000 * (1 - A.AH_CUT)
   r.g1ok, r.p1, r.p2 = math.abs(g1 - 10 * (net - 500)) < 1e-6, p1, p2
-  r.g2ok = dep2 > 0 and math.abs(g2 - 10 * (0.25 * net - 0.75 * dep2 - 500)) < 1e-6
+  r.g2ok = dep2 > 0 and math.abs(g2 - 10 * (0.25 * (net - 500) - 0.75 * dep2)) < 1e-6
   -- 2. une seule action par objet : un flip sur un objet de la file de vente ne s'ajoute pas à la vente
   A.Flips = function()
     return { { kind = "now", id = 2589, s = fakeS(2589, 5000), qty = 10, cost = 100, maxBuy = 10, resale = 99,

@@ -423,7 +423,7 @@ MODES.today = {
   title = "Aujourd'hui",
   sort = "order",
   asc = true,
-  help = "Plan de séance : flips, achats PNJ, artisanat, farm et ventes réunis, classés par gain/minute (un conseil « à tester » compte pour moitié), dans le temps choisi et sans immobiliser plus que ton or. Les conseils au prix non tenu, ou d'un type qui échoue souvent (Fiabilité), sont écartés. AHLedger n'achète ni ne poste rien seul : chaque action reste un clic. /ahl aujourdhui 30 dans le chat.",
+  help = "Plan de séance : flips, achats PNJ, artisanat, farm et ventes réunis, classés par gain rapporté au temps et à l'or engagés (un conseil « à tester » compte pour moitié), dans le temps choisi et sans immobiliser plus que ton or. Les conseils au prix non tenu, ou d'un type qui échoue souvent (Fiabilité), sont écartés. AHLedger n'achète ni ne poste rien seul : chaque action reste un clic. /ahl aujourdhui 30 dans le chat.",
   footer = function() return UI.todayTotal or "" end,
   cols = {
     { "#", 18, function(e) return tostring(e.order) end, "order", "RIGHT" },

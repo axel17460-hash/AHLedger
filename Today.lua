@@ -12,9 +12,9 @@
 --
 -- Modèle de classement (glouton documenté) :
 --   1. Gain incrémental, homogène pour toutes les actions (en cuivre, par rapport à « ne rien faire de plus ») :
---      * vente d'un objet possédé (file, banque) : unités × (p × net − (1 − p) × dépôt − prix PNJ). Le prix PNJ
---        est l'alternative sûre (vendre au marchand) : poster ne rapporte que ce qui la dépasse. Un invendu est
---        compté pour zéro (prudent : il revient au courrier et vaut encore son prix PNJ) ;
+--      * vente d'un objet possédé (file, banque) : unités × (p × (net − prix PNJ) − (1 − p) × dépôt). Le prix PNJ
+--        est l'alternative sûre (vendre au marchand) : poster ne rapporte que ce qui la dépasse. Un invendu
+--        revient au courrier et vaut encore son prix PNJ : seul son dépôt est perdu ;
 --      * p (chance de vendre pendant l'enchère) : même modèle que les reposts de Sell.lua, vitesse de vente
 --        (s.perDay, vendus/j) contre ce qu'il faut écouler, unités moins chères devant nous comprises :
 --        p = min(1, durée en jours ÷ ((devant + unités) ÷ vendus/j)) ; vendus/j inconnu : UNKNOWN_SELL_P.
@@ -146,14 +146,15 @@ function Today.SellProb(s, units, hours, ahead)
 end
 
 -- Gain incrémental de la mise en vente de `units` objets possédés à `price`/u :
--- units × (p × net − (1 − p) × dépôt − prix PNJ). Renvoie gain, p, dépôt/u, prix PNJ/u.
+-- units × (p × (net − prix PNJ) − (1 − p) × dépôt) : un invendu revient au courrier et garde sa
+-- valeur PNJ, seul le dépôt est perdu. Renvoie gain, p, dépôt/u, prix PNJ/u.
 function Today.SaleGain(id, s, units, price, hours, ahead, trust)
   local p = Today.SellProb(s, units, hours, ahead)
   if trust == "test" then p = p * Today.TEST_WEIGHT end
   local net = price * (1 - cut())
   local dep = depositPerUnit(id, s)
   local vend = vendorPrice(id)
-  return units * (p * net - (1 - p) * dep - vend), p, dep, vend
+  return units * (p * (net - vend) - (1 - p) * dep), p, dep, vend
 end
 
 ------------------------------------------------------------------------
