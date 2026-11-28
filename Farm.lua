@@ -67,7 +67,7 @@ function Farm.Stop()
   local db = ns.realmDB()
   db.farm[#db.farm + 1] = s
   Farm.current = nil
-  ns.print(("Session enregistrée : %d min. Résultats dans /ahl, onglet Farm."):format(math.floor((s.stop - s.start) / 60)))
+  ns.print(("Session enregistrée : %d min. Résultats dans /ahl, onglet Opérations, vue Mes sessions."):format(math.floor((s.stop - s.start) / 60)))
 end
 
 -- Si on se déconnecte en pleine session, on la clôture proprement

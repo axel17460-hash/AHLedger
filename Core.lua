@@ -26,11 +26,22 @@ function ns.print(msg)
   DEFAULT_CHAT_FRAME:AddMessage("|cff33ccffAHLedger|r " .. tostring(msg))
 end
 
--- Exécute fn en affichant toute erreur dans le chat (le jeu masque les erreurs Lua par défaut)
+-- Exécute fn en affichant toute erreur dans le chat (le jeu masque les erreurs Lua par défaut).
+-- Les erreurs sont aussi gardées dans AHLedgerDB.errors (20 dernières, avec l'heure), lisibles après
+-- /reload sans passer par /ahl diag.
+ns.errors = {}
 function ns.safe(label, fn, ...)
   local ok, err = pcall(fn, ...)
   if not ok then
     ns.print("|cffff5050Erreur (" .. label .. ") :|r " .. tostring(err))
+    ns.errors[#ns.errors + 1] = label .. " : " .. tostring(err)
+    if #ns.errors > 20 then table.remove(ns.errors, 1) end
+    if type(AHLedgerDB) == "table" then
+      AHLedgerDB.errors = AHLedgerDB.errors or {}
+      local list = AHLedgerDB.errors
+      list[#list + 1] = date("%d/%m %H:%M ") .. label .. " : " .. tostring(err)
+      while #list > 20 do table.remove(list, 1) end
+    end
   end
   return ok
 end
@@ -39,7 +50,12 @@ end
 function ns.on(event, fn)
   if not ns.listeners[event] then
     ns.listeners[event] = {}
-    frame:RegisterEvent(event)
+    -- un client récent refuse les événements qu'il ne connaît pas : on les note pour /ahl diag
+    local valid = not (C_EventUtils and C_EventUtils.IsEventValid) or C_EventUtils.IsEventValid(event)
+    if not valid or not pcall(frame.RegisterEvent, frame, event) then
+      ns.invalidEvents = ns.invalidEvents or {}
+      ns.invalidEvents[event] = true
+    end
   end
   table.insert(ns.listeners[event], fn)
 end
@@ -105,11 +121,20 @@ function ns.realmDB()
   return r
 end
 
+-- Combien tu en as dans tes sacs à l'instant (lu au jeu, sans relire les sacs)
+function ns.countItem(id)
+  local f = (C_Item and C_Item.GetItemCount) or GetItemCount
+  return id and f and f(id) or 0
+end
+
 function ns.itemIdFromLink(link)
   if not link then return nil end
   local id = link:match("item:(%d+)")
   return id and tonumber(id) or nil
 end
+
+-- Objets dont on attend la réponse du serveur (GET_ITEM_INFO_RECEIVED)
+ns.wantInfo = {}
 
 -- Métadonnées objets (nom, prix de revente PNJ), remplies au fil des scans
 function ns.rememberItem(itemId, name)
@@ -118,21 +143,44 @@ function ns.rememberItem(itemId, name)
     meta = {}
     AHLedgerDB.items[itemId] = meta
   end
-  if name and not meta.n then meta.n = name end
-  if not meta.s then
+  -- "" est vrai en Lua : l'API Retail renvoie un nom vide tant que l'objet n'est pas en cache,
+  -- on ne le stocke jamais (sinon le nom reste vide pour toujours)
+  if name and name ~= "" and not meta.n then meta.n = name end
+  if not meta.s or not meta.n then
     local iname, _, quality, _, _, _, _, _, _, _, sellPrice, classID = ns.GetItemInfo(itemId)
-    if sellPrice then
+    if sellPrice and not meta.s then
       meta.s = sellPrice
       meta.q = quality
       meta.c = classID
-      if iname and not meta.n then meta.n = iname end
     end
+    if iname and iname ~= "" and not meta.n then meta.n = iname end
+    if not (meta.s and meta.n) then ns.wantInfo[itemId] = true end
   end
+end
+
+-- Noms manquants (anciennes données ou objets pas encore en cache) : on les redemande au serveur
+-- par paquets de 100 par seconde ; GET_ITEM_INFO_RECEIVED complète la base quand il répond.
+function ns.FillMissingNames()
+  local missing = {}
+  for id, meta in pairs(AHLedgerDB.items) do
+    if meta.n == "" then meta.n = nil end
+    if not meta.n and type(id) == "number" then missing[#missing + 1] = id end
+  end
+  local i = 1
+  local function batch()
+    for j = i, math.min(i + 99, #missing) do ns.rememberItem(missing[j]) end
+    i = i + 100
+    if i <= #missing then C_Timer.After(1, function() ns.safe("noms d'objets", batch) end) end
+  end
+  if #missing > 0 then C_Timer.After(2, function() ns.safe("noms d'objets", batch) end) end
+  return #missing
 end
 
 -- 123456 -> "12|cffffd700g|r 34|cffc7c7cfs|r 56|cffeda55fc|r"
 function ns.money(c)
   if not c then return "-" end
+  -- moins d'un cuivre (prix à l'unité de flèches, balles…) : on garde les décimales
+  if c ~= 0 and math.abs(c) < 0.5 then return ("%.2f|cffeda55fc|r"):format(c) end
   c = math.floor(c + 0.5)
   local neg = c < 0
   if neg then c = -c end
@@ -157,13 +205,20 @@ end
 -- GetItemInfo renvoie nil tant que l'objet n'est pas dans le cache du client :
 -- on complète les métadonnées (dont le prix de rachat PNJ) quand le serveur répond.
 ns.on("GET_ITEM_INFO_RECEIVED", function(itemId, success)
-  if success and AHLedgerDB and AHLedgerDB.items and AHLedgerDB.items[itemId] then
+  if not (itemId and ns.wantInfo[itemId]) then return end -- un objet demandé par un autre addon
+  ns.wantInfo[itemId] = nil
+  if success ~= false and AHLedgerDB and AHLedgerDB.items and AHLedgerDB.items[itemId] then
     ns.rememberItem(itemId)
   end
 end)
 
 ns.on("AUCTION_HOUSE_SHOW", function() ns.ahOpen = true end)
 ns.on("AUCTION_HOUSE_CLOSED", function() ns.ahOpen = false end)
+-- Simples drapeaux pour /ahl banque et /ahl pnj : rien n'est lu à l'ouverture
+ns.on("BANKFRAME_OPENED", function() ns.bankOpen = true end)
+ns.on("BANKFRAME_CLOSED", function() ns.bankOpen = false end)
+ns.on("MERCHANT_SHOW", function() ns.merchantOpen = true end)
+ns.on("MERCHANT_CLOSED", function() ns.merchantOpen = false end)
 
 ns.on("ADDON_LOADED", function(name)
   if name ~= ADDON then return end
@@ -172,6 +227,7 @@ ns.on("ADDON_LOADED", function(name)
   AHLedgerDB.realms = AHLedgerDB.realms or {}
   AHLedgerDB.items = AHLedgerDB.items or {}
   ns.dataVersion = 1
+  ns.FillMissingNames()
   if ns.onLoad then ns.onLoad() end
   C_Timer.After(5, function()
     ns.print("chargé : onglet « AHLedger » dans l'hôtel des ventes, ou /ahl. Les scans complets d'Auctionator sont lus automatiquement.")
@@ -191,8 +247,10 @@ local function slash(input)
       AuctionFrame and (AuctionFrame:IsShown() and "visible" or "caché") or "absent",
       AuctionHouseFrame and (AuctionHouseFrame:IsShown() and "visible" or "caché") or "absent",
       QueryAuctionItems and "oui" or "non", tostring(canQ), tostring(canAll), ns.realmKey()))
+  elseif cmd == "options" or cmd == "opt" then
+    ns.Options.Toggle()
   elseif cmd == "raw" then
-    AHLedgerDB.keepRaw = (rest ~= "off")
+    ns.Options.Set("keepRaw", rest ~= "off")
     ns.print("Snapshots bruts pour l'export Python : " .. (AHLedgerDB.keepRaw and "activés" or "désactivés"))
   elseif cmd == "scan" then
     ns.Scan.Start()
@@ -206,13 +264,43 @@ local function slash(input)
     if rest == "start" then ns.Farm.Start()
     elseif rest == "stop" then ns.Farm.Stop()
     else ns.print("/ahl farm start | stop") end
+  elseif cmd == "metiers" or cmd == "métiers" or cmd == "prof" then
+    ns.Prof.Report()
+  elseif cmd == "monter" or cmd == "montee" or cmd == "montée" then
+    ns.Plan.Command(rest)
+  elseif cmd == "diag" then
+    ns.Diag.Print()
+  elseif cmd == "verdicts" or cmd == "verdict" then
+    local on = ns.BagMarks.ToggleVerdicts()
+    ns.print("Verdicts du bilan sur les sacs et la banque : " .. (on and "allumés (rouge perte, violet stop, orange prix)" or "éteints"))
+    if on then
+      local names = ns.BagMarks.InBagsText()
+      ns.print(#names > 0 and ("Bande sur : " .. table.concat(names, ", ") .. (ns.ahOpen and "" or " (visible à l'HV)"))
+        or "Aucun objet du bilan dans tes sacs pour l'instant (la banque compte quand elle est ouverte).")
+    end
+  elseif cmd == "banque" or cmd == "bank" then
+    if not ns.bankOpen then ns.print("Ouvre ta banque, puis refais /ahl banque.") return end
+    ns.Bags.ScanBank()
+    local n = 0
+    for _ in pairs(ns.Prof.Char().bank or {}) do n = n + 1 end
+    ns.print(("Banque relue : %d objets différents."):format(n))
+  elseif cmd == "pnj" or cmd == "marchand" then
+    if not ns.merchantOpen then ns.print("Ouvre un marchand, puis refais /ahl pnj.") return end
+    ns.print(("Prix du marchand relevés : %d objets."):format(ns.Vendor.Record()))
+  elseif cmd == "claude" or cmd == "export" or cmd == "rapport" then
+    ns.Export.Show()
+  elseif cmd == "souscote" or cmd == "sous-cote" or cmd == "undercut" then
+    ns.Undercut.Report()
+  elseif cmd == "bilan" then
+    ns.Tracker.Report()
+    ns.Ledger.Report()
   elseif cmd == "prune" then
     local keep = tonumber(rest) or 0
     local r = ns.realmDB()
     while #r.scans > keep do table.remove(r.scans, 1) end
     ns.print(("Scans purgés, %d conservés. Pense à /reload pour écrire le fichier."):format(#r.scans))
   else
-    ns.print("Commandes : /ahl (fenêtre) | scan | status | farm start | farm stop | prune <n> | raw on|off | debug")
+    ns.print("Commandes : /ahl (fenêtre) | options | scan | status | metiers | bilan | souscote (qui te sous-cote, et à quelle vitesse) | claude (rapport à copier) | diag | verdicts (bandes du bilan sur les sacs) | banque (banque ouverte : la relire) | pnj (marchand ouvert : relever ses prix) | monter <métier> [niveau] | farm start | farm stop | prune <n> | raw on|off | debug")
   end
 end
 SlashCmdList.AHLEDGER = function(input) ns.safe("/ahl " .. (input or ""), slash, input) end
