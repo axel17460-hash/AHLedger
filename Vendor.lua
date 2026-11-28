@@ -35,10 +35,17 @@ end
 -- achats à l'HV (Tracker.LogBuy, marqués « PNJ »). Rien à l'ouverture du marchand : seul ton clic
 -- d'achat (BuyMerchantItem) déclenche le relevé. La quantité est celle qui arrive vraiment dans tes
 -- sacs (une pile de 5 achetée d'un clic compte 5) ; le prix, celui du marchand à l'unité.
-Vendor.BUY_WAIT = 10 -- secondes sans rien recevoir : l'achat n'est pas passé (or, sacs pleins), on oublie
-local buying = {}    -- [id] = { unit = prix /u, before = compte dans les sacs, t }
+Vendor.BUY_WAIT = 10 -- secondes après le dernier clic d'achat : au-delà, ce qui arrive n'en vient pas
+local buying = {}    -- [id] = { unit = prix /u, before = compte dans les sacs, left = unités attendues, t = clic }
 
-local function onBuy(index)
+-- Ce qu'un clic peut faire arriver au plus. Le sens de quantity (unités ou piles du marchand) n'est pas
+-- vérifié sur Forever : on prend le plus grand des deux. Sans ce plafond, un objet du même nom ramassé
+-- juste après (butin, courrier) était compté comme acheté au prix du marchand.
+local function expected(quantity, stack)
+  return math.max(tonumber(quantity) or 1, 1) * math.max(stack or 1, 1)
+end
+
+local function onBuy(index, quantity)
   local id = GetMerchantItemLink and ns.itemIdFromLink(GetMerchantItemLink(index))
   if not id then return end
   local name, price, stack, _, extendedCost = ns.GetMerchantItem(index)
@@ -50,7 +57,9 @@ local function onBuy(index)
     b = { before = ns.countItem(id) }
     buying[id] = b
   end
+  -- la fenêtre part du clic : ce qui arrive ensuite ne la prolonge pas
   b.unit, b.t = price / math.max(stack or 1, 1), GetTime()
+  b.left = (b.left or 0) + expected(quantity, stack)
 end
 
 -- Après chaque mise à jour des sacs : ce qui est arrivé depuis le clic d'achat
@@ -61,9 +70,10 @@ function Vendor.OnBags()
     if now - b.t > Vendor.BUY_WAIT then
       buying[id] = nil
     elseif have > b.before then
-      local got = have - b.before
-      ns.Tracker.LogBuy(id, got, math.floor(got * b.unit + 0.5), nil, "PNJ")
-      b.before, b.t = have, now
+      local got = math.min(have - b.before, b.left or 0)
+      if got > 0 then ns.Tracker.LogBuy(id, got, math.floor(got * b.unit + 0.5), nil, "PNJ") end
+      b.before, b.left = have, (b.left or 0) - got
+      if b.left <= 0 then buying[id] = nil end -- tout l'achat est arrivé : le reste n'en vient pas
     else
       b.before = have -- revendu au marchand entre-temps : on repart de là
     end
@@ -73,7 +83,7 @@ end
 function Vendor.HookBuys()
   if Vendor.hooked or not (hooksecurefunc and BuyMerchantItem) then return end
   Vendor.hooked = true
-  hooksecurefunc("BuyMerchantItem", function(index) ns.safe("achat PNJ", onBuy, index) end)
+  hooksecurefunc("BuyMerchantItem", function(index, quantity) ns.safe("achat PNJ", onBuy, index, quantity) end)
 end
 ns.on("PLAYER_LOGIN", function() ns.safe("achat PNJ", Vendor.HookBuys) end)
 ns.on("BAG_UPDATE_DELAYED", function() if next(buying) then ns.safe("achat PNJ", Vendor.OnBags) end end)

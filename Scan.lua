@@ -503,6 +503,7 @@ function Scan.Finish()
   -- liste reçue en partie : on n'en garde rien (prix, ventes, carnet d'ordres restent ceux d'avant)
   local truncated, usual = Scan.IsTruncated(db, #rows)
   local run = db.rejectRun
+  local newRef -- le marché a rétréci : ce scan devient la référence (taille et comparaison)
   if truncated then
     if run and math.abs(#rows - run.size) <= run.size * Scan.SAME_SIZE then
       run.count, run.size = run.count + 1, (run.size * run.count + #rows) / (run.count + 1)
@@ -511,11 +512,11 @@ function Scan.Finish()
     end
     db.rejectRun = run
     if run.count >= Scan.ACCEPT_AFTER then
-      truncated, usual = false, nil -- nouvelle référence : ce scan n'est pas « partiel » non plus
+      truncated, usual, newRef = false, nil, true -- nouvelle référence : ce scan n'est pas « partiel » non plus
       -- la taille de la série devient la référence (avec ce scan : 2 valeurs, pas de repli sur les
       -- anciens totaux de db.scans qui ramèneraient l'ancienne taille)
       -- et il n'est pas comparé au dernier grand scan : ses enchères absentes passeraient pour des ventes
-      db.scanSizes, db.rejectRun, db.lastSigs = { math.floor(run.size) }, nil, nil
+      db.scanSizes, db.rejectRun, db.lastSigs, db.sigsTime = { math.floor(run.size) }, nil, nil, nil
       ns.print(("%d scans de suite à ~%d enchères : le marché a rétréci, ce scan est gardé."):format(run.count, run.size))
     end
   else
@@ -541,7 +542,7 @@ function Scan.Finish()
     end
     db.partialRun = pr
     if pr.count >= Scan.ACCEPT_AFTER then
-      db.scanSizes, db.partialRun = { math.floor(pr.size) }, nil
+      db.scanSizes, db.partialRun, newRef = { math.floor(pr.size) }, nil, true
       rememberSize(db, #rows)
       ns.print(("%d scans de suite à ~%d enchères : le marché a rétréci, c'est la nouvelle taille de référence."):format(pr.count, pr.size))
     end
@@ -551,7 +552,9 @@ function Scan.Finish()
   end
 
   local items, sigs = Scan.Aggregate(rows)
-  local gap = db.lastScanTime and (now - db.lastScanTime) or nil
+  -- écart avec le scan de comparaison (db.sigsTime : le dernier scan complet, pas forcément le dernier scan)
+  local base = db.sigsTime or db.lastScanTime
+  local gap = base and (now - base) or nil
   local diff
   local missing = #(Scan.pending or {})
   local holes = missing > math.max(20, (#rows + missing) * Scan.MISSING_SHARE)
@@ -635,8 +638,14 @@ function Scan.Finish()
       items = Scan.PackItems(packed),
     }
   end
+  -- repère pour Scan.Repair : ce scan petit est voulu (marché rétréci), il ne faut pas le retirer
+  if newRef and db.scans[#db.scans] and db.scans[#db.scans].t == now then db.scans[#db.scans].acc = true end
   while #db.scans > ns.MAX_SCANS do table.remove(db.scans, 1) end
-  db.lastSigs = sigs
+  -- Un scan partiel ne sert pas de comparaison au suivant : ses enchères manquantes y passeraient pour
+  -- de nouvelles mises en vente, arrivées entre les deux. On garde le dernier scan complet.
+  if not ((half or holes) and not newRef) then
+    db.lastSigs, db.sigsTime = sigs, now
+  end
   db.lastScanTime = now
   Scan.pending = nil
 
@@ -687,9 +696,11 @@ function Scan.UndoScan(db, i)
   end
   local wasLast = db.lastScanTime == sc.t
   table.remove(db.scans, i)
+  -- c'était le scan de comparaison (un scan partiel a pu venir après) : le prochain n'est comparé à rien
+  if db.sigsTime == sc.t then db.lastSigs, db.sigsTime = nil, nil end
   if wasLast then
     local prev = db.scans[#db.scans]
-    db.lastSigs, db.book, db.lastMin, db.snipes = nil, {}, {}, nil
+    db.lastSigs, db.sigsTime, db.book, db.lastMin, db.snipes = nil, nil, {}, {}, nil
     db.lastScanTime = prev and prev.t or nil
     for id, rest in tostring(prev and prev.items or ""):gmatch("(%d+)=([^;]*)") do
       local minP = tonumber(rest:match("^%d+,%d+,(%d+)"))
@@ -702,15 +713,17 @@ function Scan.Repair(db)
   db = db or ns.realmDB()
   local fixed = 0
   local i = 2
+  local refFrom = 1 -- dernier scan gardé exprès petit (marché rétréci) : la référence repart de lui
   while db.scans and i <= #db.scans do
     local sc = db.scans[i]
+    if sc.acc then refFrom = i end
     local sizes = {}
-    for j = i - 1, math.max(1, i - Scan.SIZE_REF), -1 do
+    for j = i - 1, math.max(refFrom, i - Scan.SIZE_REF), -1 do
       if db.scans[j].total and db.scans[j].total > 0 then sizes[#sizes + 1] = db.scans[j].total end
     end
     table.sort(sizes)
     local usual = #sizes >= 2 and (sizes[math.floor((#sizes + 1) / 2)] + sizes[math.ceil((#sizes + 1) / 2)]) / 2
-    if usual and sc.total and sc.total < usual * Scan.COMPLETE_SHARE then
+    if not sc.acc and usual and sc.total and sc.total < usual * Scan.COMPLETE_SHARE then
       Scan.UndoScan(db, i)
       fixed = fixed + 1
     else

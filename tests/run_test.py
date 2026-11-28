@@ -1613,14 +1613,18 @@ perf = lua.eval("""function(ns)
   ns.Analysis.ItemStats = function(...) calls = calls + 1; return real(...) end
   ns.dataVersion = ns.dataVersion + 1
   local ids = { 4306, 4338, 2589, 2592 }
-  for i, id in ipairs(ids) do painter({}, {}, { bag = 0, slot = i, itemID = id }) end
+  -- les cases restent référencées (comme dans le jeu, où Daylight UI les garde) : Marks.info a des
+  -- clés faibles, une case {} jetable pouvait disparaître au ramasse-miettes en plein calcul
+  local slots = {}
+  for i = 1, #ids do slots[i] = {} end
+  for i, id in ipairs(ids) do painter(slots[i], {}, { bag = 0, slot = i, itemID = id }) end
   out.paintCalls = calls
   runTimers()
   out.warmCalls = calls
   out.ready = ns.Analysis.Ready()
   for _, id in ipairs(ids) do out.ready = out.ready and ns.Decide.Ready(id, math.max(ns.Bags.Count(id), 1)) end
   calls = 0
-  for i, id in ipairs(ids) do painter({}, {}, { bag = 0, slot = i, itemID = id }) end
+  for i, id in ipairs(ids) do painter(slots[i], {}, { bag = 0, slot = i, itemID = id }) end
   out.repaintCalls = calls
   ns.Analysis.ItemStats = real
   AHLedgerDB.opt, DaylightUI, ns.Look.me = savedOpt, nil, nil
@@ -1917,6 +1921,9 @@ edge = lua.eval("""function(ns)
   local t4 = db.lastScanTime
   scan({ small[1], small[2], small[3] })
   out.newRefHolds = db.lastScanTime ~= t4
+  -- au /reload suivant, la réparation ne retire ni le scan gardé exprès ni ceux qui le suivent
+  local nKept = #db.scans
+  out.repairKeepsShrink = db.scans[nKept - 1].acc == true and Scan.Repair(db) == 0 and #db.scans == nKept
   -- (d) flip sans carnet d'ordres : pas de prix
   local savedBook = db.book
   db.book = {}
@@ -1931,6 +1938,7 @@ print("Scan tronqué, cas limites :", dict(edge))
 assert edge["oneSize"], dict(edge)
 assert edge["canStored"] and edge["fixedOne"] and edge["keptNewer"], dict(edge)
 assert edge["shrink"] == "false,false,true" and edge["newRef"] and edge["newRefHolds"] and edge["adoptNoDiff"], dict(edge)
+assert edge["repairKeepsShrink"], dict(edge)
 assert edge["noBook"], dict(edge)
 print("OK : une seule taille connue, keepRaw coupé, marché rétréci, flip sans carnet d'ordres")
 
@@ -2345,6 +2353,7 @@ part = lua.eval("""function(ns)
   local half = {}
   for i = 1, math.floor(#full / 2) do half[i] = full[i] end
   db.scanSizes = { #full, #full, #full } -- référence connue (les tests d'avant l'ont fait varier)
+  local sigsFull, tFull = db.lastSigs, db.lastScanTime
   advance(1800)
   AUCTIONS = half
   LOG = {}
@@ -2353,6 +2362,20 @@ part = lua.eval("""function(ns)
   out.partial = db.partial and db.partial.n == #half
   out.noDiff = db.scans[#db.scans].gap == nil
   out.stored = db.lastScanTime ~= nil and db.scans[#db.scans].total == #half
+  -- le scan partiel ne devient pas la comparaison du suivant : on garde le dernier scan complet
+  out.baseKept = db.lastSigs == sigsFull and db.sigsTime == tFull and db.lastScanTime ~= tFull
+  -- scan complet suivant, mêmes enchères : comparé au complet d'il y a 1 h, aucune « nouvelle » enchère
+  advance(1800)
+  AUCTIONS = full
+  SlashCmdList.AHLEDGER("scan"); runTimers()
+  local last, posted = db.scans[#db.scans], 0
+  for rest in tostring(last.items):gmatch("%d+=([^;]*)") do
+    local f = {}
+    for v in rest:gmatch("[^,]+") do f[#f + 1] = tonumber(v) or 0 end
+    posted = posted + (f[9] or 0)
+  end
+  out.diffVsFull = last.gap == 3600 and posted == 0
+  out.posted = posted
   ns.ahOpen = false
   buildAuctions()
   ns.dataVersion = ns.dataVersion + 1
@@ -2361,6 +2384,7 @@ end""")(ns)
 partd = dict(part)
 print("Scan partiel :", {k: (strip(v)[:160] if isinstance(v, str) else v) for k, v in partd.items()})
 assert "Scan partiel" in strip(partd["said"]) and partd["partial"] and partd["noDiff"] and partd["stored"], partd
+assert partd["baseKept"] and partd["diffVsFull"], partd
 print("OK : 1.0 phase 1 — un seul prix net, coût de recette (composants à toi = valeur brute), prix douteux non prouvé, scan partiel sans ventes, commission bornée, erreurs gardées")
 
 
@@ -2784,6 +2808,18 @@ p3 = lua.eval("""function(ns)
   COUNT[2321] = 15
   fire("BAG_UPDATE_DELAYED")
   out.twoClicks = #db.buys == 2 and db.buys[2].c == 10 and db.buys[2].g == 200
+  -- butin du même objet juste après l'achat (dans les 10 s) : pas un achat
+  COUNT[2321] = 18
+  fire("BAG_UPDATE_DELAYED")
+  out.lootNotBought = #db.buys == 2
+  COUNT[2321] = 15
+  -- un clic sur une pile de 5, et 8 arrivent d'un coup (3 de butin) : 5 achetés à 100c, le reste ignoré
+  BuyMerchantItem(1, 1)
+  COUNT[2321] = 23
+  fire("BAG_UPDATE_DELAYED")
+  out.capped = #db.buys == 3 and db.buys[3].c == 5 and db.buys[3].g == 100
+  table.remove(db.buys, 3)
+  COUNT[2321] = 15
   -- payé en insignes : pas d'or, pas de relevé
   BuyMerchantItem(2, 1); COUNT[5099] = 1; fire("BAG_UPDATE_DELAYED")
   out.tokenIgnored = #db.buys == 2
@@ -2937,6 +2973,7 @@ print("Phase 3 :", {k: (strip(v) if isinstance(v, str) else v) for k, v in r3.it
 # 1. marchand
 assert r3["noBuyOnShow"] and r3["notYet"] and r3["buy"] == "2321,5,100,PNJ", r3
 assert r3["twoClicks"] and r3["tokenIgnored"] and r3["failedForgotten"], r3
+assert r3["lootNotBought"] and r3["capped"], r3
 # 2. fabrication : 3 sacs, la 3e comptée quand le sac arrive ; tissu à sa valeur brute (30c, PNJ)
 assert r3["waitOutput"] and r3["crafts"] == 3 and r3["craft"] == "5001,1,1,2,30" and r3["seriesOver"], r3
 # 3. Bilan : 3 sacs à 80c (20c payés chacun) ; il reste 12 fils à 20c
